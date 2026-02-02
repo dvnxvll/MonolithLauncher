@@ -60,11 +60,5 @@ These are used mainly for Linux Wayland sessions and Microsoft auth:
 - `MONOLITH_DISABLE_COMPOSITING` (maps to `WEBKIT_DISABLE_COMPOSITING_MODE`).
 - `MONOLITH_MS_CLIENT_ID` (override the Microsoft OAuth client id).
 
-## Screenshots
-![Accounts](screenshots/Auth1.png)
-![Accounts - Verify](screenshots/Auth2.png)
-![Accounts - Done](screenshots/Auth3.png)
-![Logs](screenshots/Logs.png)
-
 ## License
 MIT License. See `LICENSE`.

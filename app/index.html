@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Monolith Launcher</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body data-theme="dark">
+    <div class="bg-glow"></div>
+    <div class="titlebar" data-tauri-drag-region>
+      <div class="titlebar-left" data-tauri-drag-region>
+        <div class="titlebar-mark">ML</div>
+        <div class="titlebar-text">
+          <span class="titlebar-name">Monolith Launcher</span>
+          <span class="titlebar-sub">Desktop</span>
+        </div>
+      </div>
+      <div class="titlebar-controls">
+        <button class="titlebar-button" id="titlebarMinimize" aria-label="Minimize">-</button>
+        <button class="titlebar-button" id="titlebarMaximize" aria-label="Toggle fullscreen">[]</button>
+        <button class="titlebar-button close" id="titlebarClose" aria-label="Close">X</button>
+      </div>
+    </div>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">ML</div>
+          <div class="brand-text">
+            <span class="brand-title">Monolith</span>
+            <span class="brand-subtitle">Launcher</span>
+          </div>
+        </div>
+
+        <nav class="nav">
+          <button class="nav-item is-active" data-target="overview">Overview</button>
+          <button class="nav-item" data-target="instances">Instances</button>
+          <button class="nav-item" data-target="accounts">Accounts</button>
+          <button class="nav-item" data-target="settings">Settings</button>
+        </nav>
+
+        <div class="sidebar-footer">
+          <div class="status">
+            <span class="status-dot"></span>
+            Arch Linux - stable profile
+          </div>
+          <button class="ghost" data-action="check-updates">Check updates</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div class="title">
+            <h1>Monolith</h1>
+            <p>Minimal, stable launcher for multi-instance Minecraft.</p>
+          </div>
+          <div class="actions">
+            <div class="pill" id="javaPill">Java 17</div>
+            <select id="instanceSelect" class="topbar-select" aria-label="Active instance"></select>
+            <button class="secondary" data-action="navigate" data-target="accounts">
+              Profiles
+            </button>
+            <button class="primary" id="playButton">Play</button>
+          </div>
+        </header>
+
+        <div class="status-bar" id="globalStatus">Ready.</div>
+
+        <section class="content">
+          <section class="panel is-active" data-section="overview">
+            <div class="hero">
+              <div class="hero-text">
+                <div class="hero-eyebrow">MONOLITH LAUNCHER</div>
+                <h2>Launch fast. Keep every instance isolated.</h2>
+                <p>
+                  Monochrome UI, minimal clutter, and the controls you need upfront. Select an
+                  instance and press play.
+                </p>
+                <div class="hero-actions">
+                  <button class="primary" id="playButtonHero" data-action="navigate" data-target="instances">
+                    Manage instances
+                  </button>
+                  <button class="ghost" data-action="navigate" data-target="settings">
+                    Settings
+                  </button>
+                </div>
+              </div>
+              <div class="hero-card">
+                <div class="hero-card-header">
+                  <div>
+                    <div class="hero-label">Active instance</div>
+                    <div class="hero-title" id="activeInstanceName">No instances yet</div>
+                    <div class="hero-sub" id="activeInstanceMeta">Create an instance to get started.</div>
+                  </div>
+                  <span class="tag" id="activeInstanceTag">Ready</span>
+                </div>
+                <div class="hero-meta">
+                  <div class="meta-row">
+                    <span class="meta-label">Directory</span>
+                    <span class="meta-value" id="activeInstanceDirectory">—</span>
+                  </div>
+                </div>
+                <div class="actions-row">
+                  <button class="secondary" data-action="instance-open-active">Open folder</button>
+                  <button
+                    class="ghost"
+                    data-action="navigate"
+                    data-target="settings"
+                    data-subtarget="settings-java"
+                  >
+                    Launch settings
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="split-panel">
+              <article class="card wide">
+                <div class="card-header">
+                  <h3>Instances preview</h3>
+                  <button class="ghost" data-action="navigate" data-target="instances">
+                    Open library
+                  </button>
+                </div>
+                <div class="list" id="overviewInstanceList"></div>
+              </article>
+            </div>
+          </section>
+
+          <section class="panel" data-section="instances">
+            <div class="panel-header">
+              <div>
+                <h2>Instances</h2>
+                <p>Each instance has its own directory and isolated data.</p>
+              </div>
+              <div class="actions">
+                <button class="ghost" data-action="instance-import">Import</button>
+                <button class="primary" data-action="open-create-modal">Create instance</button>
+              </div>
+            </div>
+            <div class="instances-layout">
+              <div class="instances-list" id="instancesListView">
+                <div class="grid two" id="instancesGrid"></div>
+              </div>
+
+              <div class="instance-detail" id="instanceDetailView" aria-hidden="true">
+                <div class="instance-detail-header">
+                  <div class="instance-breadcrumb">
+                    <div class="breadcrumb-path">
+                      <span id="instanceDetailName">Instance</span>
+                      <span class="breadcrumb-sep">></span>
+                      <button class="ghost" data-action="instance-open-paths">Paths</button>
+                    </div>
+                    <button class="ghost" data-action="instance-back">Back</button>
+                  </div>
+                  <div class="instance-actions">
+                    <button class="primary" data-action="instance-start">Start</button>
+                    <button class="secondary" data-action="instance-stop">Stop</button>
+                    <button class="ghost" data-action="instance-kill">Kill</button>
+                  </div>
+                </div>
+
+                <div class="instance-tabs" role="tablist">
+                  <button class="instance-tab is-active" data-instance-tab="overview">Overview</button>
+                  <button class="instance-tab" data-instance-tab="mods">Mods</button>
+                  <button class="instance-tab" data-instance-tab="resourcepacks">Resourcepacks</button>
+                  <button class="instance-tab" data-instance-tab="shaders">Shaders</button>
+                  <button class="instance-tab" data-instance-tab="texturepacks">Texturepacks</button>
+                  <button class="instance-tab" data-instance-tab="servers">Servers</button>
+                  <button class="instance-tab" data-instance-tab="worlds">Worlds</button>
+                  <button class="instance-tab" data-instance-tab="settings">Settings</button>
+                </div>
+
+                <div class="instance-panel is-active" data-instance-panel="overview">
+                  <div class="instance-overview-grid">
+                    <div class="instance-overview-card">
+                      <div class="overview-title">Session</div>
+                      <div class="overview-meta" id="instanceDetailMeta">—</div>
+                      <div class="overview-actions">
+                        <button class="secondary" data-action="instance-open-folder">Open folder</button>
+                      </div>
+                    </div>
+                    <div class="instance-overview-card">
+                      <div class="overview-title">JVM memory</div>
+                      <canvas id="instanceMemoryGraph" height="120"></canvas>
+                      <div class="overview-sub" id="instanceMemoryLabel">Waiting for telemetry…</div>
+                    </div>
+                  </div>
+                  <div class="instance-log-card">
+                    <div class="overview-title">Instance log</div>
+                    <pre id="instanceDetailLog"></pre>
+                  </div>
+                </div>
+
+                <div class="instance-panel" data-instance-panel="mods">
+                  <div class="panel-summary">
+                    <div class="overview-title">Mods</div>
+                    <div class="overview-sub" id="modsSummary">0 enabled</div>
+                  </div>
+                  <div class="instance-table" id="modsTable"></div>
+                </div>
+
+                <div class="instance-panel" data-instance-panel="resourcepacks">
+                  <div class="panel-summary">
+                    <div class="overview-title">Resourcepacks</div>
+                    <div class="overview-sub" id="resourcepacksSummary">0 enabled</div>
+                  </div>
+                  <div class="instance-table" id="resourcepacksTable"></div>
+                </div>
+
+                <div class="instance-panel" data-instance-panel="shaders">
+                  <div class="panel-summary">
+                    <div class="overview-title">Shaders</div>
+                    <div class="overview-sub" id="shadersSummary">0 enabled</div>
+                  </div>
+                  <div class="instance-table" id="shadersTable"></div>
+                </div>
+
+                <div class="instance-panel" data-instance-panel="texturepacks">
+                  <div class="panel-summary">
+                    <div class="overview-title">Texturepacks</div>
+                    <div class="overview-sub" id="texturepacksSummary">0 enabled</div>
+                  </div>
+                  <div class="instance-table" id="texturepacksTable"></div>
+                </div>
+
+                <div class="instance-panel" data-instance-panel="servers">
+                  <div class="panel-summary">
+                    <div class="overview-title">Servers</div>
+                    <div class="overview-sub">server list for this instance</div>
+                  </div>
+                  <div class="instance-table" id="serversTable"></div>
+                </div>
+
+                <div class="instance-panel" data-instance-panel="worlds">
+                  <div class="panel-summary">
+                    <div class="overview-title">Worlds</div>
+                    <div class="overview-sub">Local saves</div>
+                  </div>
+                  <div class="instance-table" id="worldsTable"></div>
+                </div>
+
+                <div class="instance-panel" data-instance-panel="settings">
+                  <div class="instance-settings-grid">
+                    <div class="instance-setting-card">
+                      <div class="overview-title">Directories</div>
+                      <div class="overview-actions">
+                        <button class="secondary" data-action="instance-open-folder">Open root</button>
+                        <button class="ghost" data-action="instance-open-resourcepacks">Resourcepacks</button>
+                        <button class="ghost" data-action="instance-open-shaderpacks">Shaders</button>
+                        <button class="ghost" data-action="instance-open-texturepacks">Texturepacks</button>
+                      </div>
+                    </div>
+                    <div class="instance-setting-card">
+                      <div class="overview-title">JVM overrides</div>
+                      <div class="field-group">
+                        <label class="field">
+                          <span>Min RAM (GB)</span>
+                          <input id="instanceMinRam" type="number" min="2" max="32" />
+                        </label>
+                        <label class="field">
+                          <span>Max RAM (GB)</span>
+                          <input id="instanceMaxRam" type="number" min="2" max="32" />
+                        </label>
+                      </div>
+                      <label class="field">
+                        <span>JVM args</span>
+                        <textarea id="instanceJvmArgs" rows="3"></textarea>
+                      </label>
+                      <div class="overview-actions">
+                        <button class="primary" data-action="instance-save-settings">Save</button>
+                        <button class="ghost" data-action="instance-reset-settings">Reset</button>
+                      </div>
+                    </div>
+                    <div class="instance-setting-card danger">
+                      <div class="overview-title">Delete instance</div>
+                      <div class="overview-sub">This removes the instance from the launcher.</div>
+                      <button class="ghost" data-action="instance-delete">Delete instance</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel" data-section="accounts">
+            <div class="panel-header">
+              <div>
+                <h2>Accounts</h2>
+                <p>Multiple accounts supported, including offline profiles.</p>
+              </div>
+              <div class="actions">
+                <button
+                  class="ghost"
+                  data-action="navigate"
+                  data-target="accounts"
+                  data-subtarget="accounts-microsoft"
+                >
+                  Manage tokens
+                </button>
+                <button
+                  class="primary"
+                  data-action="navigate"
+                  data-target="accounts"
+                  data-subtarget="accounts-offline"
+                >
+                  Add account
+                </button>
+              </div>
+            </div>
+
+            <div class="subtabs" role="tablist" aria-label="Accounts sub menu">
+              <button class="subtab-item is-active" data-subtarget="accounts-microsoft">
+                Microsoft
+              </button>
+              <button class="subtab-item" data-subtarget="accounts-offline">Offline</button>
+            </div>
+
+            <div class="subpanel is-active" data-subsection="accounts-microsoft">
+              <div class="grid two" id="microsoftAccountsGrid">
+                <article class="card" data-static="true">
+                  <div class="card-header">
+                    <h3>Connect Microsoft account</h3>
+                    <span class="tag">OAuth</span>
+                  </div>
+                  <div class="card-body">
+                    <div class="metric-label">
+                      Sign in with Microsoft to enable online sessions and skins.
+                    </div>
+                    <div class="actions-row">
+                      <button class="primary" id="microsoftLoginButton">Sign in</button>
+                      <button
+                        class="ghost"
+                        data-action="open-external"
+                        data-url="https://learn.microsoft.com/"
+                      >
+                        Learn more
+                      </button>
+                    </div>
+                    <div class="helper-text">
+                      Requires a configured client ID. Offline mode works without it.
+                    </div>
+                  </div>
+                </article>
+                <article class="card" data-static="true">
+                  <div class="card-header">
+                    <h3>Token tools</h3>
+                    <span class="tag">Maintenance</span>
+                  </div>
+                  <div class="card-body">
+                    <div class="metric-label">
+                      Refresh Microsoft tokens and check Minecraft ownership.
+                    </div>
+                    <div class="actions-row">
+                      <button class="secondary" data-action="ms-refresh-all">Refresh tokens</button>
+                      <button class="ghost" data-action="ms-check-entitlements">Check ownership</button>
+                    </div>
+                    <div class="helper-text">
+                      Ownership check hits Minecraft services entitlements.
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </div>
+
+            <div class="subpanel" data-subsection="accounts-offline">
+              <div class="warning-banner" id="offlineWarning" aria-hidden="true">
+                You need to add at least one Microsoft account to use offline account.
+              </div>
+              <div class="grid two" id="offlineAccountsGrid">
+                <article class="card" data-static="true">
+                  <div class="card-header">
+                    <h3>Add offline profile</h3>
+                    <span class="tag">Local</span>
+                  </div>
+                  <div class="card-body">
+                    <label class="field">
+                      <span>Display name</span>
+                      <input id="offlineNameInput" type="text" placeholder="Player name" />
+                    </label>
+                    <div class="actions-row">
+                      <button class="primary" id="addOfflineButton">Add offline</button>
+                    </div>
+                    <div class="helper-text">
+                      Offline profiles are stored locally and can be used without sign-in.
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel" data-section="settings">
+            <div class="panel-header">
+              <div>
+                <h2>Settings</h2>
+                <p>Reference instance and sync control for packs and configs.</p>
+              </div>
+              <div class="actions">
+                <button class="ghost" data-action="export-config">Export</button>
+                <button class="primary" id="saveSettingsButton">Save changes</button>
+              </div>
+            </div>
+
+            <div class="subtabs" role="tablist" aria-label="Settings sub menu">
+              <button class="subtab-item is-active" data-subtarget="settings-general">
+                General
+              </button>
+              <button class="subtab-item" data-subtarget="settings-java">Java</button>
+            </div>
+
+            <div class="subpanel is-active" data-subsection="settings-general">
+              <div class="grid two">
+                <article class="card">
+                  <div class="card-header">
+                    <h3>Reference instance</h3>
+                    <span class="tag">Sync source</span>
+                  </div>
+                  <div class="card-body">
+                    <label class="field">
+                      <span>Reference instance</span>
+                      <select id="referenceInstanceSelect"></select>
+                    </label>
+                    <div class="divider"></div>
+                    <div class="toggle-row">
+                      <div>
+                        <div class="list-title">Sync packs</div>
+                        <div class="list-sub">Resource, shader, texture packs</div>
+                      </div>
+                      <label class="switch">
+                        <input id="syncEnabledToggle" type="checkbox" checked />
+                        <span class="track"></span>
+                      </label>
+                    </div>
+                    <div class="toggle-row">
+                      <div>
+                        <div class="list-title">Apply to new instances</div>
+                        <div class="list-sub">Use reference packs on creation</div>
+                      </div>
+                      <label class="switch">
+                        <input id="syncApplyNewToggle" type="checkbox" checked />
+                        <span class="track"></span>
+                      </label>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="card">
+                  <div class="card-header">
+                    <h3>Packs</h3>
+                    <span class="tag">Per-instance</span>
+                  </div>
+                  <div class="card-body">
+                    <div class="toggle-row">
+                      <div>
+                        <div class="list-title">Resourcepacks</div>
+                        <div class="list-sub">Keep synchronized</div>
+                      </div>
+                      <label class="switch">
+                        <input id="syncResourcepacksToggle" type="checkbox" checked />
+                        <span class="track"></span>
+                      </label>
+                    </div>
+                    <div class="toggle-row">
+                      <div>
+                        <div class="list-title">Shaderpacks</div>
+                        <div class="list-sub">Keep synchronized</div>
+                      </div>
+                      <label class="switch">
+                        <input id="syncShaderpacksToggle" type="checkbox" />
+                        <span class="track"></span>
+                      </label>
+                    </div>
+                    <div class="toggle-row">
+                      <div>
+                        <div class="list-title">Texturepacks</div>
+                        <div class="list-sub">Keep synchronized</div>
+                      </div>
+                      <label class="switch">
+                        <input id="syncTexturepacksToggle" type="checkbox" checked />
+                        <span class="track"></span>
+                      </label>
+                    </div>
+                    <div class="toggle-row">
+                      <div>
+                        <div class="list-title">Server list</div>
+                        <div class="list-sub">Keep synchronized</div>
+                      </div>
+                      <label class="switch">
+                        <input id="syncServerListToggle" type="checkbox" checked />
+                        <span class="track"></span>
+                      </label>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="card">
+                  <div class="card-header">
+                    <h3>Theme</h3>
+                    <span class="tag">Monochrome</span>
+                  </div>
+                  <div class="card-body">
+                    <label class="field">
+                      <span>UI theme</span>
+                      <select id="themeSelect">
+                        <option value="dark">Dark</option>
+                        <option value="light">Light</option>
+                      </select>
+                    </label>
+                    <div class="helper-text">Default is dark mode.</div>
+                  </div>
+                </article>
+
+                <article class="card">
+                  <div class="card-header">
+                    <h3>Microsoft Client ID</h3>
+                    <span class="tag">OAuth</span>
+                  </div>
+                  <div class="card-body">
+                    <label class="field">
+                      <span>Client ID</span>
+                      <input
+                        id="microsoftClientId"
+                        type="text"
+                        placeholder="f6a09c4f-4f6d-4aad-972e-e770de1ef9c8"
+                      />
+                    </label>
+                    <div class="helper-text">
+                      Used for Microsoft sign-in. Leave empty to use default or env override.
+                    </div>
+                  </div>
+                </article>
+
+                <article class="card">
+                  <div class="card-header">
+                    <h3>App logs</h3>
+                    <span class="tag">Diagnostics</span>
+                  </div>
+                  <div class="card-body">
+                    <div class="metric-label">View launcher + game logs in a drawer.</div>
+                    <div class="actions-row">
+                      <button class="secondary" data-action="open-log-drawer">See logs</button>
+                      <button class="ghost" data-action="clear-logs">Clear</button>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="card wide">
+                  <div class="card-header">
+                    <h3>Instance directories</h3>
+                    <span class="tag">No overlap</span>
+                  </div>
+                  <div class="card-body">
+                    <label class="field">
+                      <span>Default instance root</span>
+                      <select id="defaultRootSelect"></select>
+                    </label>
+                    <div class="list" id="rootList"></div>
+                    <div class="actions-row">
+                      <button class="ghost" data-action="default-root-save">Change default</button>
+                      <button class="ghost" data-action="root-add">Add directory</button>
+                      <button class="secondary" data-action="root-reindex">Reindex</button>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </div>
+
+            <div class="subpanel" data-subsection="settings-java">
+              <div class="grid two">
+                <article class="card">
+                  <div class="card-header">
+                    <h3>Global Java</h3>
+                    <span class="tag">Default runtime</span>
+                  </div>
+                  <div class="card-body">
+                    <label class="field">
+                      <span>Java version</span>
+                      <select id="globalJavaSelect">
+                        <option value="auto">Auto-detect</option>
+                        <option value="21">Java 21</option>
+                        <option value="17">Java 17</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>Java path</span>
+                      <input id="globalJavaPath" type="text" placeholder="/usr/lib/jvm/..." />
+                    </label>
+                    <div class="actions-row">
+                      <button class="ghost" data-action="java-detect">Detect</button>
+                      <button class="secondary" data-action="java-browse">Browse</button>
+                    </div>
+                    <div class="helper-text">Used when an instance has no override.</div>
+                  </div>
+                </article>
+
+                <article class="card">
+                  <div class="card-header">
+                    <h3>Per-instance Java</h3>
+                    <span class="tag">Overrides</span>
+                  </div>
+                  <div class="card-body">
+                    <label class="field">
+                      <span>Instance</span>
+                      <select id="instanceJavaSelect"></select>
+                    </label>
+                    <label class="field">
+                      <span>Java version</span>
+                      <select id="instanceJavaVersion">
+                        <option value="inherit">Inherit global</option>
+                        <option value="21">Java 21</option>
+                        <option value="17">Java 17</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>Java path</span>
+                      <input id="instanceJavaPath" type="text" placeholder="Optional override" />
+                    </label>
+                    <div class="actions-row">
+                      <button class="primary" id="applyJavaOverrideButton">Apply override</button>
+                      <button class="ghost" id="clearJavaOverrideButton">Clear override</button>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="card wide">
+                  <div class="card-header">
+                    <h3>Memory and JVM</h3>
+                    <span class="tag">Performance</span>
+                  </div>
+                  <div class="card-body">
+                    <div class="field-group">
+                      <label class="field">
+                        <span>Min RAM (GB)</span>
+                        <input id="minRamInput" type="number" value="6" min="2" max="32" />
+                      </label>
+                      <label class="field">
+                        <span>Max RAM (GB)</span>
+                        <input id="maxRamInput" type="number" value="12" min="2" max="32" />
+                      </label>
+                    </div>
+                    <label class="field">
+                      <span>JVM args</span>
+                      <textarea id="jvmArgsInput" rows="3">-XX:+UseG1GC -XX:MaxGCPauseMillis=80 -Dsun.rmi.dgc.server.gcInterval=2147483646</textarea>
+                    </label>
+                  </div>
+                </article>
+              </div>
+            </div>
+          </section>
+
+        </section>
+      </main>
+    </div>
+
+    <div class="modal" id="instanceCreateModal" aria-hidden="true">
+      <div class="modal-backdrop" data-action="close-create-modal"></div>
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <h3>Create instance</h3>
+            <p>Vanilla, Fabric, or Forge. Visible only when needed.</p>
+          </div>
+          <button class="ghost" data-action="close-create-modal">Close</button>
+        </div>
+        <div class="modal-body">
+          <label class="field">
+            <span>Name</span>
+            <input id="instanceName" type="text" placeholder="New instance name" />
+          </label>
+          <div class="field-group">
+            <label class="field">
+              <span>Loader</span>
+              <select id="loaderSelect">
+                <option value="vanilla">Vanilla</option>
+                <option value="fabric">Fabric</option>
+                <option value="forge">Forge</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Include snapshots</span>
+              <div class="field-switch">
+                <label class="switch">
+                  <input id="snapshotsToggle" type="checkbox" />
+                  <span class="track"></span>
+                </label>
+              </div>
+            </label>
+          </div>
+          <div class="field-group">
+            <label class="field">
+              <span>Game version</span>
+              <select id="gameVersionSelect"></select>
+            </label>
+            <label class="field">
+              <span>Loader version</span>
+              <select id="loaderVersionSelect"></select>
+            </label>
+          </div>
+          <label class="field">
+            <span>Instance root</span>
+            <select id="rootSelect"></select>
+          </label>
+          <div class="actions-row">
+            <button class="primary" id="createInstanceButton">Create instance</button>
+            <button class="ghost" id="refreshVersionsButton">Refresh versions</button>
+          </div>
+          <div class="helper-text" id="createInstanceStatus">Waiting for input.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal" id="instanceDeleteModal" aria-hidden="true">
+      <div class="modal-backdrop" data-action="close-delete-modal"></div>
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <h3>Delete instance</h3>
+            <p>Type the instance name to confirm.</p>
+          </div>
+          <button class="ghost" data-action="close-delete-modal">Close</button>
+        </div>
+        <div class="modal-body">
+          <div class="helper-text" id="instanceDeletePrompt"></div>
+          <label class="field">
+            <span>Confirmation</span>
+            <input id="instanceDeleteInput" type="text" placeholder="Type instance name" />
+          </label>
+          <div class="actions-row">
+            <button class="primary" id="instanceDeleteConfirm" disabled>Confirm delete</button>
+            <button class="ghost" data-action="close-delete-modal">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <aside class="log-drawer" id="logDrawer" aria-hidden="true">
+      <div class="drawer-header">
+        <div>
+          <div class="drawer-label">Logs</div>
+          <div class="drawer-title">Launcher logs</div>
+          <div class="drawer-sub">Diagnostics for support</div>
+        </div>
+        <button class="ghost" data-action="close-log-drawer">Close</button>
+      </div>
+      <div class="drawer-body">
+        <div class="drawer-actions">
+          <button class="secondary" id="copyLog">Copy</button>
+          <button class="ghost" data-action="clear-logs">Clear</button>
+        </div>
+        <div class="instance-tabs" role="tablist">
+          <button class="instance-tab is-active" data-log-tab="launcher">Launcher</button>
+          <button class="instance-tab" data-log-tab="game">Game</button>
+        </div>
+        <div class="log-panel is-active" data-log-panel="launcher">
+          <pre id="logOutput"></pre>
+        </div>
+        <div class="log-panel" data-log-panel="game">
+          <pre id="gameLogOutput"></pre>
+        </div>
+      </div>
+    </aside>
+
+    <div class="install-overlay" id="installOverlay" aria-hidden="true">
+      <div class="install-card">
+        <div class="install-title">Installing instance</div>
+        <div class="install-message" id="installMessage">Preparing download pipeline.</div>
+        <div class="progress-bar">
+          <span id="installProgress"></span>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="dist/app.js"></script>
+  </body>
+</html>

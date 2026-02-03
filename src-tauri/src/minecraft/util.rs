@@ -1,4 +1,6 @@
-use crate::minecraft::models::{MavenCoordinate, MojangLibraryArtifact, MojangRule};
+use crate::minecraft::models::{
+  FeatureFlags, MavenCoordinate, MojangFeatureRule, MojangLibraryArtifact, MojangRule,
+};
 use crate::minecraft::DEFAULT_LIBRARIES_URL;
 
 pub(crate) fn current_os_name() -> &'static str {
@@ -16,23 +18,68 @@ pub(crate) fn current_arch_suffix() -> &'static str {
   }
 }
 
-pub(crate) fn rules_allow(rules: &Option<Vec<MojangRule>>, os_name: &str) -> bool {
-  let mut allowed = true;
+pub(crate) fn rules_allow(
+  rules: &Option<Vec<MojangRule>>,
+  os_name: &str,
+  features: &FeatureFlags,
+) -> bool {
   let rules = match rules {
     Some(rules) => rules,
-    None => return allowed,
+    None => return true,
   };
+  let mut allowed = false;
 
   for rule in rules {
-    let applies = match &rule.os {
+    let os_applies = match &rule.os {
       Some(os) => os.name.as_deref() == Some(os_name),
       None => true,
     };
-    if applies {
+    let features_apply = match &rule.features {
+      Some(rule_features) => features_match(rule_features, features),
+      None => true,
+    };
+    if os_applies && features_apply {
       allowed = rule.action == "allow";
     }
   }
   allowed
+}
+
+fn features_match(rule: &MojangFeatureRule, features: &FeatureFlags) -> bool {
+  if !rule.extra.is_empty() {
+    return false;
+  }
+  if let Some(expected) = rule.is_demo_user {
+    if expected != features.is_demo_user {
+      return false;
+    }
+  }
+  if let Some(expected) = rule.has_custom_resolution {
+    if expected != features.has_custom_resolution {
+      return false;
+    }
+  }
+  if let Some(expected) = rule.has_quick_plays_support {
+    if expected != features.has_quick_plays_support {
+      return false;
+    }
+  }
+  if let Some(expected) = rule.is_quick_play_singleplayer {
+    if expected != features.is_quick_play_singleplayer {
+      return false;
+    }
+  }
+  if let Some(expected) = rule.is_quick_play_multiplayer {
+    if expected != features.is_quick_play_multiplayer {
+      return false;
+    }
+  }
+  if let Some(expected) = rule.is_quick_play_realms {
+    if expected != features.is_quick_play_realms {
+      return false;
+    }
+  }
+  true
 }
 
 pub(crate) fn library_allowed(rules: Option<&Vec<MojangRule>>, os_name: &str) -> bool {

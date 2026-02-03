@@ -1,9 +1,9 @@
-use crate::config::{AppConfig, Instance, Loader};
+use crate::config::{AccountKind, AppConfig, Instance, Loader};
 use crate::minecraft::download::{download_to, load_json};
 use crate::minecraft::instance::ensure_instance_ready;
 use crate::minecraft::models::{
-  Argument, ArgumentValue, LaunchContext, MojangLibrary, ResolvedVersion, VersionArguments,
-  VersionFile, VersionLogging,
+  Argument, ArgumentValue, FeatureFlags, LaunchContext, MojangLibrary, ResolvedVersion,
+  VersionArguments, VersionFile, VersionLogging,
 };
 use crate::minecraft::util::{
   build_maven_path_url, classpath_separator, current_os_name, library_allowed,
@@ -12,8 +12,12 @@ use crate::minecraft::util::{
 use crate::minecraft::{DEFAULT_LIBRARIES_URL};
 use std::{
   collections::{HashMap, HashSet},
+  env,
+  io::{BufRead, BufReader},
   path::{Path, PathBuf},
-  process::Command,
+  process::{Command, Stdio},
+  sync::Arc,
+  thread,
 };
 
 pub fn launch_instance(
@@ -21,6 +25,8 @@ pub fn launch_instance(
   player_name: Option<String>,
   config: &AppConfig,
   emit: &dyn Fn(crate::minecraft::models::ProgressEvent),
+  log: Arc<dyn Fn(&str, &str) + Send + Sync>,
+  on_exit: Option<Arc<dyn Fn(u32) + Send + Sync>>,
 ) -> Result<u32, String> {
   let instance = config
     .instances
@@ -70,12 +76,8 @@ pub fn launch_instance(
     download_logging_config(logging, &assets_root)?;
   }
 
-  let player = player_name
-    .or_else(|| resolve_player_name(config))
-    .unwrap_or_else(|| "Player".to_string());
-  let uuid = offline_uuid(&player);
-  let access_token = "0".to_string();
-  let user_type = "legacy".to_string();
+  let (player, uuid, access_token, user_type, xuid) = resolve_auth(player_name, config);
+  let client_id = uuid::Uuid::new_v4().to_string();
   let version_type = "release".to_string();
 
   let context = LaunchContext {
@@ -83,6 +85,8 @@ pub fn launch_instance(
     uuid,
     access_token,
     user_type,
+    xuid,
+    client_id,
     version_name: resolved
       .id
       .clone()
@@ -99,8 +103,9 @@ pub fn launch_instance(
 
   let mut jvm_args = Vec::new();
   let os_name = current_os_name();
+  let feature_flags = FeatureFlags::default();
   if let Some(arguments) = &resolved.arguments {
-    jvm_args.extend(flatten_arguments(arguments.jvm.as_ref(), os_name));
+    jvm_args.extend(flatten_arguments(arguments.jvm.as_ref(), os_name, &feature_flags));
   }
 
   jvm_args.retain(|arg| {
@@ -120,10 +125,14 @@ pub fn launch_instance(
     }
   }
 
-  let min_ram = instance.java_min_ram_gb.unwrap_or(config.settings.java.min_ram_gb);
-  let max_ram = instance.java_max_ram_gb.unwrap_or(config.settings.java.max_ram_gb);
-  jvm_args.push(format!("-Xms{}G", min_ram));
-  jvm_args.push(format!("-Xmx{}G", max_ram));
+  let min_ram_mb = instance
+    .java_min_ram_mb
+    .unwrap_or(config.settings.java.min_ram_mb);
+  let max_ram_mb = instance
+    .java_max_ram_mb
+    .unwrap_or(config.settings.java.max_ram_mb);
+  jvm_args.push(format!("-Xms{}M", min_ram_mb));
+  jvm_args.push(format!("-Xmx{}M", max_ram_mb));
   jvm_args.push(format!("-Djava.library.path={}", context.natives_dir));
   jvm_args.extend(config.settings.java.jvm_args.split_whitespace().map(String::from));
   if let Some(extra) = &instance.jvm_args {
@@ -134,7 +143,7 @@ pub fn launch_instance(
 
   let mut game_args = Vec::new();
   if let Some(arguments) = &resolved.arguments {
-    game_args.extend(flatten_arguments(arguments.game.as_ref(), os_name));
+    game_args.extend(flatten_arguments(arguments.game.as_ref(), os_name, &feature_flags));
   } else if let Some(raw) = &resolved.minecraft_arguments {
     game_args.extend(raw.split_whitespace().map(|item| item.to_string()));
   }
@@ -145,14 +154,45 @@ pub fn launch_instance(
   final_args.push(main_class);
   final_args.extend(game_args.into_iter().map(|arg| replace_tokens(arg, &context)));
 
-  let java_cmd = resolve_java_command(config, instance);
+  let java_cmd = resolve_java_command(config, instance)?;
   let mut command = Command::new(&java_cmd);
   command.args(final_args);
   command.current_dir(&instance_dir);
-  let child = command
+  command.stdout(Stdio::piped());
+  command.stderr(Stdio::piped());
+  let mut child = command
     .spawn()
-    .map_err(|err| format!("failed to launch java: {}", err))?;
-  Ok(child.id())
+    .map_err(|err| format!("failed to launch java ({}): {}", java_cmd, err))?;
+
+  if let Some(stdout) = child.stdout.take() {
+    let log = log.clone();
+    thread::spawn(move || {
+      let reader = BufReader::new(stdout);
+      for line in reader.lines().flatten() {
+        log("stdout", &line);
+      }
+    });
+  }
+
+  if let Some(stderr) = child.stderr.take() {
+    let log = log.clone();
+    thread::spawn(move || {
+      let reader = BufReader::new(stderr);
+      for line in reader.lines().flatten() {
+        log("stderr", &line);
+      }
+    });
+  }
+
+  let pid = child.id();
+  if let Some(callback) = on_exit {
+    thread::spawn(move || {
+      let _ = child.wait();
+      callback(pid);
+    });
+  }
+
+  Ok(pid)
 }
 
 fn resolve_version_id(instance: &Instance) -> String {
@@ -262,7 +302,11 @@ fn merge_arguments(
   Some(merged)
 }
 
-fn flatten_arguments(arguments: Option<&Vec<Argument>>, os_name: &str) -> Vec<String> {
+fn flatten_arguments(
+  arguments: Option<&Vec<Argument>>,
+  os_name: &str,
+  features: &FeatureFlags,
+) -> Vec<String> {
   let mut flat = Vec::new();
   let arguments = match arguments {
     Some(arguments) => arguments,
@@ -273,7 +317,7 @@ fn flatten_arguments(arguments: Option<&Vec<Argument>>, os_name: &str) -> Vec<St
     match arg {
       Argument::String(value) => flat.push(value.clone()),
       Argument::Object(obj) => {
-        if rules_allow(&obj.rules, os_name) {
+        if rules_allow(&obj.rules, os_name, features) {
           match &obj.value {
             ArgumentValue::String(value) => flat.push(value.clone()),
             ArgumentValue::List(list) => flat.extend(list.clone()),
@@ -392,6 +436,8 @@ fn replace_tokens(value: String, context: &LaunchContext) -> String {
     .replace("${assets_index_name}", &context.asset_index_name)
     .replace("${auth_uuid}", &context.uuid)
     .replace("${auth_access_token}", &context.access_token)
+    .replace("${auth_xuid}", &context.xuid)
+    .replace("${clientid}", &context.client_id)
     .replace("${user_type}", &context.user_type)
     .replace("${version_type}", &context.version_type)
     .replace("${user_properties}", "{}")
@@ -433,12 +479,49 @@ fn resolve_player_name(config: &AppConfig) -> Option<String> {
     .map(|account| account.display_name.clone())
 }
 
+fn resolve_auth(
+  player_name: Option<String>,
+  config: &AppConfig,
+) -> (String, String, String, String, String) {
+  if let Some(active_id) = config.active_account_id.as_ref() {
+    if let Some(account) = config.accounts.iter().find(|item| &item.id == active_id) {
+      if account.kind == AccountKind::Microsoft {
+        if let (Some(token), Some(uuid)) = (account.access_token.clone(), account.uuid.clone()) {
+          return (
+            account.display_name.clone(),
+            uuid,
+            token,
+            "msa".to_string(),
+            "0".to_string(),
+          );
+        }
+      }
+      if account.kind == AccountKind::Offline {
+        let player = player_name
+          .or_else(|| Some(account.display_name.clone()))
+          .unwrap_or_else(|| "Player".to_string());
+        let uuid = account
+          .uuid
+          .clone()
+          .unwrap_or_else(|| offline_uuid(&player));
+        return (player, uuid, "0".to_string(), "legacy".to_string(), "0".to_string());
+      }
+    }
+  }
+
+  let player = player_name
+    .or_else(|| resolve_player_name(config))
+    .unwrap_or_else(|| "Player".to_string());
+  let uuid = offline_uuid(&player);
+  (player, uuid, "0".to_string(), "legacy".to_string(), "0".to_string())
+}
+
 fn offline_uuid(name: &str) -> String {
   let offline = format!("OfflinePlayer:{}", name);
   uuid::Uuid::new_v3(&uuid::Uuid::NAMESPACE_DNS, offline.as_bytes()).to_string()
 }
 
-fn resolve_java_command(config: &AppConfig, instance: &Instance) -> String {
+fn resolve_java_command(config: &AppConfig, instance: &Instance) -> Result<String, String> {
   let override_path = config
     .settings
     .java
@@ -454,11 +537,44 @@ fn resolve_java_command(config: &AppConfig, instance: &Instance) -> String {
       let bin_name = if cfg!(windows) { "java.exe" } else { "java" };
       let bin = candidate.join("bin").join(bin_name);
       if bin.exists() {
-        return bin.to_string_lossy().to_string();
+        return Ok(bin.to_string_lossy().to_string());
       }
+      return Err(format!(
+        "Java executable not found. Expected {} inside {}.",
+        bin.display(),
+        candidate.display()
+      ));
     }
-    return candidate.to_string_lossy().to_string();
+    if candidate.exists() {
+      return Ok(candidate.to_string_lossy().to_string());
+    }
+    return Err(format!(
+      "Java executable not found at {}.",
+      candidate.display()
+    ));
   }
 
-  "java".to_string()
+  let bin_name = if cfg!(windows) { "java.exe" } else { "java" };
+  if let Some(java_home) = env::var_os("JAVA_HOME") {
+    let candidate = PathBuf::from(java_home).join("bin").join(bin_name);
+    if candidate.exists() {
+      return Ok(candidate.to_string_lossy().to_string());
+    }
+  }
+  if let Some(found) = find_in_path(bin_name) {
+    return Ok(found.to_string_lossy().to_string());
+  }
+
+  Err("Java not found in PATH. Configure a Java path in Settings or set JAVA_HOME.".to_string())
+}
+
+fn find_in_path(bin_name: &str) -> Option<PathBuf> {
+  let path_var = env::var_os("PATH")?;
+  for path in env::split_paths(&path_var) {
+    let candidate = path.join(bin_name);
+    if candidate.exists() {
+      return Some(candidate);
+    }
+  }
+  None
 }

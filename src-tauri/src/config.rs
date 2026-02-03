@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
+  collections::HashSet,
   fs,
   io,
   path::{Path, PathBuf},
@@ -57,11 +58,17 @@ pub struct Instance {
   #[serde(default)]
   pub loader_version: Option<String>,
   pub show_snapshots: bool,
+  #[serde(default)]
+  pub pinned: bool,
   pub root_id: Option<String>,
   pub directory: String,
   #[serde(default)]
+  pub java_min_ram_mb: Option<u32>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub java_min_ram_gb: Option<u8>,
   #[serde(default)]
+  pub java_max_ram_mb: Option<u32>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub java_max_ram_gb: Option<u8>,
   #[serde(default)]
   pub jvm_args: Option<String>,
@@ -80,6 +87,8 @@ pub struct InstanceManifest {
   #[serde(default)]
   pub show_snapshots: bool,
   #[serde(default)]
+  pub pinned: bool,
+  #[serde(default)]
   pub created_at_unix: Option<u64>,
   #[serde(default)]
   pub directory: Option<String>,
@@ -90,8 +99,12 @@ pub struct InstanceManifest {
   #[serde(default)]
   pub installed_loader_version: Option<String>,
   #[serde(default)]
+  pub java_min_ram_mb: Option<u32>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub java_min_ram_gb: Option<u8>,
   #[serde(default)]
+  pub java_max_ram_mb: Option<u32>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub java_max_ram_gb: Option<u8>,
   #[serde(default)]
   pub jvm_args: Option<String>,
@@ -106,19 +119,28 @@ impl InstanceManifest {
       loader: instance.loader.clone(),
       loader_version: instance.loader_version.clone(),
       show_snapshots: instance.show_snapshots,
+      pinned: instance.pinned,
       created_at_unix,
       directory: Some(instance.directory.clone()),
       installed_version: None,
       installed_loader: None,
       installed_loader_version: None,
-      java_min_ram_gb: instance.java_min_ram_gb,
-      java_max_ram_gb: instance.java_max_ram_gb,
+      java_min_ram_mb: instance.java_min_ram_mb,
+      java_min_ram_gb: None,
+      java_max_ram_mb: instance.java_max_ram_mb,
+      java_max_ram_gb: None,
       jvm_args: instance.jvm_args.clone(),
     }
   }
 
   pub fn into_instance(self, root_id: Option<String>, directory: String) -> Instance {
     let _ = self.directory;
+    let min_mb = self
+      .java_min_ram_mb
+      .or(self.java_min_ram_gb.map(|gb| gb as u32 * 1024));
+    let max_mb = self
+      .java_max_ram_mb
+      .or(self.java_max_ram_gb.map(|gb| gb as u32 * 1024));
     Instance {
       id: self.id,
       name: self.name,
@@ -126,10 +148,13 @@ impl InstanceManifest {
       loader: self.loader,
       loader_version: self.loader_version,
       show_snapshots: self.show_snapshots,
+      pinned: self.pinned,
       root_id,
       directory,
-      java_min_ram_gb: self.java_min_ram_gb,
-      java_max_ram_gb: self.java_max_ram_gb,
+      java_min_ram_mb: min_mb,
+      java_min_ram_gb: None,
+      java_max_ram_mb: max_mb,
+      java_max_ram_gb: None,
       jvm_args: self.jvm_args,
     }
   }
@@ -166,19 +191,36 @@ pub struct PackSync {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct JavaSettings {
-  pub min_ram_gb: u8,
-  pub max_ram_gb: u8,
+  #[serde(default = "default_min_ram_mb")]
+  pub min_ram_mb: u32,
+  #[serde(default = "default_max_ram_mb")]
+  pub max_ram_mb: u32,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub min_ram_gb: Option<u8>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub max_ram_gb: Option<u8>,
   pub jvm_args: String,
   #[serde(default)]
   pub runtime: JavaRuntime,
   #[serde(default)]
   pub overrides: Vec<JavaOverride>,
+  #[serde(default)]
+  pub runtimes: Vec<JavaRuntimeEntry>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct JavaRuntime {
   pub version: Option<String>,
   pub path: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct JavaRuntimeEntry {
+  pub id: String,
+  pub label: String,
+  pub path: String,
+  #[serde(default)]
+  pub version: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -219,6 +261,8 @@ impl ConfigStore {
     config.instances = load_instances_from_roots(&config);
     normalize_default_accounts(&mut config);
     normalize_reference_instance(&mut config);
+    normalize_ram_settings(&mut config);
+    normalize_java_runtimes(&mut config);
 
     Ok(Self { path, config })
   }
@@ -232,6 +276,8 @@ impl ConfigStore {
     config.instances = load_instances_from_roots(&config);
     normalize_default_accounts(&mut config);
     normalize_reference_instance(&mut config);
+    normalize_ram_settings(&mut config);
+    normalize_java_runtimes(&mut config);
     config
   }
 
@@ -244,6 +290,8 @@ impl ConfigStore {
     config.instances = load_instances_from_roots(&config);
     normalize_default_accounts(&mut config);
     normalize_reference_instance(&mut config);
+    normalize_ram_settings(&mut config);
+    normalize_java_runtimes(&mut config);
     self.config = config;
     self.persist()
   }
@@ -299,8 +347,10 @@ impl AppConfig {
         },
         apply_to_new_instances: true,
         java: JavaSettings {
-          min_ram_gb: 6,
-          max_ram_gb: 12,
+          min_ram_mb: default_min_ram_mb(),
+          max_ram_mb: default_max_ram_mb(),
+          min_ram_gb: None,
+          max_ram_gb: None,
           jvm_args: "-XX:+UseG1GC -XX:MaxGCPauseMillis=80 -Dsun.rmi.dgc.server.gcInterval=2147483646"
             .to_string(),
           runtime: JavaRuntime {
@@ -308,6 +358,7 @@ impl AppConfig {
             path: None,
           },
           overrides: Vec::new(),
+          runtimes: Vec::new(),
         },
         theme: "dark".to_string(),
         microsoft_client_id: default_microsoft_client_id(),
@@ -318,6 +369,14 @@ impl AppConfig {
 
 fn default_theme() -> String {
   "dark".to_string()
+}
+
+fn default_min_ram_mb() -> u32 {
+  512
+}
+
+fn default_max_ram_mb() -> u32 {
+  1024
 }
 
 fn default_microsoft_client_id() -> String {
@@ -398,7 +457,11 @@ fn load_instances_from_roots(config: &AppConfig) -> Vec<Instance> {
     }
   }
 
-  instances.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+  instances.sort_by(|a, b| {
+    b.pinned
+      .cmp(&a.pinned)
+      .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+  });
   instances
 }
 
@@ -433,6 +496,94 @@ fn normalize_reference_instance(config: &mut AppConfig) {
       config.settings.reference_instance_id = None;
     }
   }
+}
+
+fn normalize_ram_settings(config: &mut AppConfig) {
+  if let Some(gb) = config.settings.java.min_ram_gb.take() {
+    config.settings.java.min_ram_mb = gb as u32 * 1024;
+  }
+  if let Some(gb) = config.settings.java.max_ram_gb.take() {
+    config.settings.java.max_ram_mb = gb as u32 * 1024;
+  }
+  if config.settings.java.min_ram_mb == 0 {
+    config.settings.java.min_ram_mb = default_min_ram_mb();
+  }
+  if config.settings.java.max_ram_mb == 0 {
+    config.settings.java.max_ram_mb = default_max_ram_mb();
+  }
+  for instance in &mut config.instances {
+    if instance.java_min_ram_mb.is_none() {
+      if let Some(gb) = instance.java_min_ram_gb.take() {
+        instance.java_min_ram_mb = Some(gb as u32 * 1024);
+      }
+    }
+    if instance.java_max_ram_mb.is_none() {
+      if let Some(gb) = instance.java_max_ram_gb.take() {
+        instance.java_max_ram_mb = Some(gb as u32 * 1024);
+      }
+    }
+    instance.java_min_ram_gb = None;
+    instance.java_max_ram_gb = None;
+  }
+}
+
+fn normalize_java_runtimes(config: &mut AppConfig) {
+  let mut seen = HashSet::new();
+  config.settings.java.runtimes.retain(|runtime| {
+    let key = runtime.path.trim().to_string();
+    if key.is_empty() {
+      return false;
+    }
+    if seen.contains(&key) {
+      return false;
+    }
+    seen.insert(key);
+    true
+  });
+
+  if let Some(path) = config.settings.java.runtime.path.clone() {
+    let trimmed = path.trim();
+    if !trimmed.is_empty()
+      && !config
+        .settings
+        .java
+        .runtimes
+        .iter()
+        .any(|runtime| runtime.path == trimmed)
+    {
+      let label = config
+        .settings
+        .java
+        .runtime
+        .version
+        .as_ref()
+        .map(|version| format!("Java {}", version))
+        .unwrap_or_else(|| "Custom Java".to_string());
+      let id = slugify_id(&label);
+      config.settings.java.runtimes.push(JavaRuntimeEntry {
+        id,
+        label,
+        path: trimmed.to_string(),
+        version: config.settings.java.runtime.version.clone(),
+      });
+    }
+  }
+}
+
+fn slugify_id(label: &str) -> String {
+  let lowered = label.to_lowercase();
+  let mut result = String::new();
+  let mut prev_dash = false;
+  for ch in lowered.chars() {
+    if ch.is_ascii_alphanumeric() {
+      result.push(ch);
+      prev_dash = false;
+    } else if !prev_dash {
+      result.push('-');
+      prev_dash = true;
+    }
+  }
+  result.trim_matches('-').to_string()
 }
 
 fn resolve_home_dir() -> Option<PathBuf> {

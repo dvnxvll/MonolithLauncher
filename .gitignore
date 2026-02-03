@@ -1,4 +1,8 @@
 AGENTS.md
 screenshots
-app/dist
+.ref
 .git
+.vscode
+minecraft-launcher-ui
+bun.lock
+.github

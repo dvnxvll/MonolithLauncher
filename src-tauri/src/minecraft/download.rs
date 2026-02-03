@@ -1,5 +1,6 @@
 use serde::de::DeserializeOwned;
 use std::{fs, io, path::Path, thread, time::Duration};
+use std::fs::OpenOptions;
 
 fn build_agent() -> ureq::Agent {
   ureq::AgentBuilder::new()
@@ -33,17 +34,22 @@ pub(crate) fn download_to(url: &str, dest: &Path) -> Result<(), String> {
   }
 
   let tmp = dest.with_extension("tmp");
-  let _ = fs::remove_file(&tmp);
   let delays = [200_u64, 500, 1000, 2000, 4000];
 
   for (idx, delay) in delays.iter().enumerate() {
-    match download_once(url, &tmp) {
+    let resume_from = match fs::metadata(&tmp) {
+      Ok(meta) if meta.len() > 0 => Some(meta.len()),
+      _ => None,
+    };
+    match download_once(url, &tmp, resume_from) {
       Ok(()) => {
         fs::rename(&tmp, dest).map_err(|err| err.to_string())?;
         return Ok(());
       }
       Err(err) => {
-        let _ = fs::remove_file(&tmp);
+        if is_range_not_satisfiable(&err) {
+          let _ = fs::remove_file(&tmp);
+        }
         if !should_retry_download(&err) || idx == delays.len() - 1 {
           return Err(format!("download failed for {}: {}", url, err));
         }
@@ -70,15 +76,27 @@ impl std::fmt::Display for DownloadError {
   }
 }
 
-fn download_once(url: &str, dest: &Path) -> Result<(), DownloadError> {
-  let response = build_agent()
+fn download_once(url: &str, dest: &Path, resume_from: Option<u64>) -> Result<(), DownloadError> {
+  let mut request = build_agent()
     .get(url)
     .set("User-Agent", "MonolithLauncher")
-    .set("Connection", "close")
-    .call()
-    .map_err(DownloadError::Http)?;
+    .set("Connection", "close");
+  if let Some(offset) = resume_from {
+    request = request.set("Range", &format!("bytes={}-", offset));
+  }
+  let response = request.call().map_err(DownloadError::Http)?;
+  let status = response.status();
   let mut reader = response.into_reader();
-  let mut file = fs::File::create(dest).map_err(DownloadError::Io)?;
+  let mut file = if resume_from.unwrap_or(0) > 0 && status == 206 {
+    OpenOptions::new().append(true).open(dest).map_err(DownloadError::Io)?
+  } else {
+    OpenOptions::new()
+      .create(true)
+      .write(true)
+      .truncate(true)
+      .open(dest)
+      .map_err(DownloadError::Io)?
+  };
   io::copy(&mut reader, &mut file).map_err(DownloadError::Io)?;
   Ok(())
 }
@@ -95,6 +113,10 @@ fn should_retry_download(err: &DownloadError) -> bool {
     DownloadError::Http(err) => should_retry_http(err),
     DownloadError::Io(_) => false,
   }
+}
+
+fn is_range_not_satisfiable(err: &DownloadError) -> bool {
+  matches!(err, DownloadError::Http(ureq::Error::Status(416, _)))
 }
 
 pub(crate) fn load_json<T: DeserializeOwned>(path: &Path) -> Result<T, String> {

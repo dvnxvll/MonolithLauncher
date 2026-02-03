@@ -9,6 +9,8 @@ pub struct ProgressEvent {
   pub message: String,
   pub current: u64,
   pub total: Option<u64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub detail: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -120,11 +122,41 @@ pub(crate) struct MojangLibraryArtifact {
 pub(crate) struct MojangRule {
   pub action: String,
   pub os: Option<MojangOsRule>,
+  #[serde(default)]
+  pub features: Option<MojangFeatureRule>,
 }
 
 #[derive(Deserialize, Clone)]
 pub(crate) struct MojangOsRule {
   pub name: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Default)]
+pub(crate) struct MojangFeatureRule {
+  #[serde(default)]
+  pub is_demo_user: Option<bool>,
+  #[serde(default)]
+  pub has_custom_resolution: Option<bool>,
+  #[serde(default)]
+  pub has_quick_plays_support: Option<bool>,
+  #[serde(default)]
+  pub is_quick_play_singleplayer: Option<bool>,
+  #[serde(default)]
+  pub is_quick_play_multiplayer: Option<bool>,
+  #[serde(default)]
+  pub is_quick_play_realms: Option<bool>,
+  #[serde(flatten)]
+  pub extra: HashMap<String, bool>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct FeatureFlags {
+  pub is_demo_user: bool,
+  pub has_custom_resolution: bool,
+  pub has_quick_plays_support: bool,
+  pub is_quick_play_singleplayer: bool,
+  pub is_quick_play_multiplayer: bool,
+  pub is_quick_play_realms: bool,
 }
 
 #[derive(Deserialize, Clone)]
@@ -237,6 +269,8 @@ pub(crate) struct LaunchContext {
   pub uuid: String,
   pub access_token: String,
   pub user_type: String,
+  pub xuid: String,
+  pub client_id: String,
   pub version_name: String,
   pub game_dir: String,
   pub assets_root: String,

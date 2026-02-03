@@ -1,9 +1,0 @@
-{
-  "name": "monolith-launcher-ui",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "build:ui": "bun build app/app.ts --outfile app/dist/app.js --target=browser --format=esm",
-    "dev:ui": "bun build app/app.ts --outfile app/dist/app.js --target=browser --format=esm --watch"
-  }
-}

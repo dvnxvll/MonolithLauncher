@@ -11,6 +11,14 @@ pub fn create_instance(
   if request.name.trim().is_empty() {
     return Err("instance name cannot be empty".to_string());
   }
+  let requested_name = request.name.trim();
+  if config
+    .instances
+    .iter()
+    .any(|instance| instance.name.eq_ignore_ascii_case(requested_name))
+  {
+    return Err("instance name already exists".to_string());
+  }
 
   if matches!(request.loader, Loader::Fabric | Loader::Forge)
     && request.loader_version.is_none()
@@ -28,6 +36,7 @@ pub fn create_instance(
     message: "Preparing instance layout".to_string(),
     current: 0,
     total: None,
+    detail: None,
   });
   create_instance_layout(&directory)?;
 
@@ -43,9 +52,12 @@ pub fn create_instance(
     loader: request.loader,
     loader_version: request.loader_version,
     show_snapshots: request.show_snapshots,
+    pinned: false,
     root_id: Some(root_id),
     directory: directory.to_string_lossy().to_string(),
+    java_min_ram_mb: None,
     java_min_ram_gb: None,
+    java_max_ram_mb: None,
     java_max_ram_gb: None,
     jvm_args: None,
   };
@@ -78,6 +90,7 @@ pub fn ensure_instance_ready(
     message: "Preparing instance assets".to_string(),
     current: 0,
     total: None,
+    detail: None,
   });
 
   match instance.loader {

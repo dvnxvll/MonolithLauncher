@@ -6,6 +6,7 @@ mod models;
 mod util;
 mod versions;
 
+pub(crate) use download::download_to;
 pub use instance::create_instance;
 pub use launch::launch_instance;
 pub use models::{

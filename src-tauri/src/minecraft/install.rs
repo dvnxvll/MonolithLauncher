@@ -11,11 +11,13 @@ use crate::minecraft::{
   DEFAULT_LIBRARIES_URL, FABRIC_LOADER_URL, MOJANG_MANIFEST_URL, RESOURCES_BASE_URL,
 };
 use std::{
-  collections::HashSet,
+  collections::{HashSet, VecDeque},
   fs,
   io,
   path::Path,
   process::Command,
+  sync::{mpsc, Arc, Mutex},
+  thread,
 };
 use zip::ZipArchive;
 
@@ -29,6 +31,7 @@ pub(crate) fn install_vanilla(
     message: format!("Resolving {}", game_version),
     current: 0,
     total: None,
+    detail: None,
   });
 
   let manifest: crate::minecraft::models::MojangManifest = fetch_json(MOJANG_MANIFEST_URL)?;
@@ -46,7 +49,7 @@ pub(crate) fn install_vanilla(
 
   let version_meta: MojangVersionMeta = load_json(&version_json_path)?;
   let client_jar_path = version_dir.join(format!("{}.jar", entry.id));
-  download_to(&version_meta.downloads.client.url, &client_jar_path)?;
+  download_zip_with_retry(&version_meta.downloads.client.url, &client_jar_path, "client jar")?;
 
   let libraries_dir = instance_dir.join("libraries");
   let natives_dir = instance_dir.join("natives").join(&entry.id);
@@ -111,7 +114,7 @@ pub(crate) fn install_forge(
   let installer_path = instance_dir
     .join("installers")
     .join(format!("forge-{}-installer.jar", full_version));
-  download_to(&installer_url, &installer_path)?;
+  download_zip_with_retry(&installer_url, &installer_path, "forge installer")?;
 
   install_vanilla(game_version, instance_dir, emit)?;
   run_forge_installer(&installer_path, instance_dir, &full_version, emit)?;
@@ -171,16 +174,7 @@ fn download_mojang_libraries(
     }
   }
 
-  let total = jobs.len() as u64;
-  for (idx, job) in jobs.into_iter().enumerate() {
-    emit(ProgressEvent {
-      stage: "libraries".to_string(),
-      message: format!("Downloading libraries ({}/{})", idx + 1, total),
-      current: (idx + 1) as u64,
-      total: Some(total),
-    });
-    download_to(&job.url, &job.dest)?;
-  }
+  download_jobs_parallel(jobs, "libraries", "Downloading libraries", emit)?;
 
   Ok(native_jars)
 }
@@ -203,6 +197,7 @@ fn extract_natives(
       message: format!("Extracting natives ({}/{})", idx + 1, total),
       current: (idx + 1) as u64,
       total: Some(total),
+      detail: None,
     });
 
     let file = fs::File::open(&native.path).map_err(|err| err.to_string())?;
@@ -237,6 +232,7 @@ fn download_assets(
     message: "Downloading asset index".to_string(),
     current: 0,
     total: None,
+    detail: None,
   });
 
   let asset_index_path = instance_dir
@@ -245,9 +241,7 @@ fn download_assets(
   download_to(&meta.asset_index.url, &asset_index_path)?;
 
   let index: MojangAssetIndexFile = load_json(&asset_index_path)?;
-  let total = index.objects.len() as u64;
-  let mut count = 0_u64;
-
+  let mut jobs = Vec::with_capacity(index.objects.len());
   for object in index.objects.values() {
     let hash = object.hash.as_str();
     if hash.len() < 2 {
@@ -260,20 +254,32 @@ fn download_assets(
       .join(hash);
 
     let url = format!("{}/{}/{}", RESOURCES_BASE_URL, prefix, hash);
-    download_to(&url, &dest)?;
-
-    count += 1;
-    if count == total || count % 250 == 0 {
-      emit(ProgressEvent {
-        stage: "assets".to_string(),
-        message: format!("Downloading assets ({}/{})", count, total),
-        current: count,
-        total: Some(total),
-      });
-    }
+    jobs.push(crate::minecraft::models::DownloadJob { url, dest });
   }
 
+  download_jobs_parallel(jobs, "assets", "Downloading assets", emit)?;
   Ok(())
+}
+
+fn download_zip_with_retry(url: &str, dest: &Path, label: &str) -> Result<(), String> {
+  download_to(url, dest)?;
+  if is_valid_zip(dest) {
+    return Ok(());
+  }
+  let _ = fs::remove_file(dest);
+  download_to(url, dest)?;
+  if is_valid_zip(dest) {
+    return Ok(());
+  }
+  Err(format!("{label} download is corrupt. Please retry."))
+}
+
+fn is_valid_zip(path: &Path) -> bool {
+  let file = match fs::File::open(path) {
+    Ok(file) => file,
+    Err(_) => return false,
+  };
+  ZipArchive::new(file).is_ok()
 }
 
 fn download_fabric_libraries(
@@ -300,16 +306,7 @@ fn download_fabric_libraries(
     }
   }
 
-  let total = jobs.len() as u64;
-  for (idx, job) in jobs.into_iter().enumerate() {
-    emit(ProgressEvent {
-      stage: "libraries".to_string(),
-      message: format!("Downloading Fabric libraries ({}/{})", idx + 1, total),
-      current: (idx + 1) as u64,
-      total: Some(total),
-    });
-    download_to(&job.url, &job.dest)?;
-  }
+  download_jobs_parallel(jobs, "libraries", "Downloading Fabric libraries", emit)?;
 
   Ok(())
 }
@@ -332,6 +329,7 @@ fn run_forge_installer(
       message: "Running Forge installer".to_string(),
       current: 0,
       total: None,
+      detail: None,
     });
 
     let output = Command::new("java")
@@ -388,15 +386,90 @@ fn download_profile_libraries(
     }
   }
 
+  download_jobs_parallel(jobs, "libraries", "Downloading Forge libraries", emit)?;
+
+  Ok(())
+}
+
+fn download_jobs_parallel(
+  jobs: Vec<crate::minecraft::models::DownloadJob>,
+  stage: &str,
+  label: &str,
+  emit: &dyn Fn(ProgressEvent),
+) -> Result<(), String> {
+  if jobs.is_empty() {
+    return Ok(());
+  }
+
+  struct DownloadResult {
+    job: crate::minecraft::models::DownloadJob,
+    error: Option<String>,
+  }
+
   let total = jobs.len() as u64;
-  for (idx, job) in jobs.into_iter().enumerate() {
+  let queue = Arc::new(Mutex::new(VecDeque::from(jobs)));
+  let (tx, rx) = mpsc::channel::<DownloadResult>();
+
+  let workers = thread::available_parallelism()
+    .map(|n| n.get())
+    .unwrap_or(4)
+    .clamp(2, 8);
+
+  let mut handles = Vec::with_capacity(workers);
+  for _ in 0..workers {
+    let queue = Arc::clone(&queue);
+    let tx = tx.clone();
+    handles.push(thread::spawn(move || loop {
+      let job = {
+        let mut guard = match queue.lock() {
+          Ok(guard) => guard,
+          Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.pop_front()
+      };
+      let Some(job) = job else { break };
+      let error = download_to(&job.url, &job.dest).err();
+      let _ = tx.send(DownloadResult { job, error });
+    }));
+  }
+  drop(tx);
+
+  let mut completed = 0_u64;
+  let mut first_error: Option<String> = None;
+
+  for _ in 0..total {
+    let result = rx.recv().map_err(|_| "download worker stopped".to_string())?;
+    completed += 1;
+
+    let detail = result
+      .job
+      .dest
+      .file_name()
+      .and_then(|name| name.to_str())
+      .map(|name| format!("{}: {}", stage, name))
+      .unwrap_or_else(|| stage.to_string());
+
     emit(ProgressEvent {
-      stage: "libraries".to_string(),
-      message: format!("Downloading Forge libraries ({}/{})", idx + 1, total),
-      current: (idx + 1) as u64,
+      stage: stage.to_string(),
+      message: format!("{label} ({}/{})", completed, total),
+      current: completed,
       total: Some(total),
+      detail: Some(detail),
     });
-    download_to(&job.url, &job.dest)?;
+
+    if let Some(err) = result.error {
+      if first_error.is_none() {
+        first_error = Some(err);
+      }
+    }
+  }
+
+  for handle in handles {
+    let _ = handle.join();
+  }
+
+  if let Some(err) = first_error {
+    return Err(err);
   }
 
   Ok(())

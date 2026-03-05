@@ -38,6 +38,11 @@ fn strip_known_suffixes(name: &str) -> String {
     .to_string()
 }
 
+fn should_skip_pack_filename(name: &str) -> bool {
+  let base = name.strip_suffix(".disabled").unwrap_or(name);
+  base.to_ascii_lowercase().ends_with(".txt")
+}
+
 fn parse_version_from_name(name: &str) -> Option<String> {
   let trimmed = strip_known_suffixes(name);
   let parts: Vec<&str> = trimmed.rsplitn(2, '-').collect();
@@ -355,6 +360,9 @@ pub(crate) fn list_instance_packs(
       Some(name) => name.to_string(),
       None => continue,
     };
+    if should_skip_pack_filename(&filename) {
+      continue;
+    }
     let enabled = !filename.ends_with(".disabled");
     let name = strip_known_suffixes(&filename);
     let version = if kind == "shaderpacks" {
@@ -424,6 +432,9 @@ pub(crate) fn list_instance_datapacks(
       Some(name) => name.to_string(),
       None => continue,
     };
+    if should_skip_pack_filename(&filename) {
+      continue;
+    }
     let enabled = !filename.ends_with(".disabled");
     let name = strip_known_suffixes(&filename);
     let version = parse_version_from_name(&filename);

@@ -8,6 +8,7 @@ use minecraft::{
   create_instance as create_instance_impl, list_fabric_game_versions as list_fabric_games_impl,
   list_fabric_loader_versions as list_fabric_loaders_impl,
   list_forge_versions as list_forge_versions_impl,
+  list_neoforge_versions as list_neoforge_versions_impl,
   list_vanilla_versions as list_vanilla_versions_impl, launch_instance as launch_instance_impl,
   ForgeVersionSummary, LoaderVersionSummary, NewInstanceRequest, ProgressEvent, VersionSummary,
 };
@@ -573,6 +574,8 @@ pub(crate) fn resolve_instance_dir(
 #[derive(serde::Serialize)]
 struct InstanceMetrics {
   rss_mb: f32,
+  cpu_load_pct: f32,
+  gpu_load_pct: Option<f32>,
 }
 
 const DISCORD_APP_ID: u64 = 1468203692716064883;
@@ -666,21 +669,62 @@ struct EntitlementItem {
 fn get_instance_metrics(
   instance_id: String,
   running: tauri::State<'_, Mutex<HashMap<String, u32>>>,
+  metrics_system: tauri::State<'_, Mutex<System>>,
 ) -> Result<Option<InstanceMetrics>, String> {
-  let map = running.lock().map_err(|_| "process map lock poisoned".to_string())?;
-  let pid = match map.get(&instance_id) {
-    Some(pid) => *pid,
-    None => return Ok(None),
+  let pid = {
+    let map = running.lock().map_err(|_| "process map lock poisoned".to_string())?;
+    match map.get(&instance_id) {
+      Some(pid) => *pid,
+      None => return Ok(None),
+    }
   };
-  let mut system = System::new();
-  system.refresh_processes();
+
+  let mut system = metrics_system
+    .lock()
+    .map_err(|_| "metrics system lock poisoned".to_string())?;
+  let refreshed = system.refresh_process(Pid::from_u32(pid));
+  if !refreshed {
+    return Ok(None);
+  }
   let process = system.process(Pid::from_u32(pid));
   if let Some(proc) = process {
-    let rss_kb = proc.memory();
-    let rss_mb = rss_kb as f32 / 1024.0;
-    return Ok(Some(InstanceMetrics { rss_mb }));
+    let rss_bytes = proc.memory();
+    let rss_mb = rss_bytes as f32 / (1024.0 * 1024.0);
+    let cpu_load_pct = proc.cpu_usage().max(0.0);
+    let gpu_load_pct = read_gpu_load_pct();
+    return Ok(Some(InstanceMetrics {
+      rss_mb,
+      cpu_load_pct,
+      gpu_load_pct,
+    }));
   }
   Ok(None)
+}
+
+fn read_gpu_load_pct() -> Option<f32> {
+  let output = Command::new("nvidia-smi")
+    .args([
+      "--query-gpu=utilization.gpu",
+      "--format=csv,noheader,nounits",
+    ])
+    .output()
+    .ok()?;
+  if !output.status.success() {
+    return None;
+  }
+
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  let value = stdout
+    .lines()
+    .find_map(|line| {
+      let trimmed = line.trim();
+      if trimmed.is_empty() {
+        None
+      } else {
+        Some(trimmed)
+      }
+    })?;
+  value.parse::<f32>().ok().map(|parsed| parsed.max(0.0))
 }
 
 fn signal_process(pid: u32, force: bool) -> Result<(), String> {
@@ -798,6 +842,13 @@ async fn list_fabric_loader_versions(
 #[tauri::command]
 async fn list_forge_versions(game_version: String) -> Result<Vec<ForgeVersionSummary>, String> {
   tauri::async_runtime::spawn_blocking(move || list_forge_versions_impl(&game_version))
+    .await
+    .map_err(|_| "version task failed".to_string())?
+}
+
+#[tauri::command]
+async fn list_neoforge_versions(game_version: String) -> Result<Vec<ForgeVersionSummary>, String> {
+  tauri::async_runtime::spawn_blocking(move || list_neoforge_versions_impl(&game_version))
     .await
     .map_err(|_| "version task failed".to_string())?
 }
@@ -922,8 +973,11 @@ pub fn run() {
 
       let config_path = app.path().app_config_dir()?.join("config.json");
       let store = ConfigStore::load(config_path)?;
+      let mut metrics_system = System::new();
+      metrics_system.refresh_processes();
       app.manage(Mutex::new(store));
       app.manage(Mutex::new(HashMap::<String, u32>::new()));
+      app.manage(Mutex::new(metrics_system));
       app.manage(Mutex::new(MicrosoftLoginState::default()));
       app.manage(Mutex::new(DiscordRpcState::new()));
       Ok(())
@@ -938,6 +992,7 @@ pub fn run() {
       commands::instances::remove_instance,
       commands::instances::repair_instance,
       commands::system::open_external,
+      commands::system::check_latest_release,
       commands::system::detect_java,
       commands::config::export_config,
       commands::instances::import_instance,
@@ -958,15 +1013,18 @@ pub fn run() {
       commands::instances::open_instance_path,
       commands::packs::open_instance_datapacks,
       commands::instances::update_instance_settings,
+      commands::instances::update_instance_loader_version,
       modrinth::search_modrinth_projects,
       modrinth::install_modrinth_project,
       modrinth::uninstall_modrinth_project,
       modrinth::list_modrinth_installs,
+      modrinth::list_modrinth_updates,
       get_instance_metrics,
       list_vanilla_versions,
       list_fabric_game_versions,
       list_fabric_loader_versions,
       list_forge_versions,
+      list_neoforge_versions,
       create_instance,
       launch_instance,
       stop_instance,

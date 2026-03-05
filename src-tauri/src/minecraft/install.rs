@@ -8,7 +8,8 @@ use crate::minecraft::util::{
   parse_maven_coordinate, resolve_library_artifact,
 };
 use crate::minecraft::{
-  DEFAULT_LIBRARIES_URL, FABRIC_LOADER_URL, MOJANG_MANIFEST_URL, RESOURCES_BASE_URL,
+  DEFAULT_LIBRARIES_URL, FABRIC_LOADER_URL, MOJANG_MANIFEST_URL, NEOFORGE_MAVEN_BASE,
+  RESOURCES_BASE_URL,
 };
 use std::{
   collections::{HashSet, VecDeque},
@@ -118,6 +119,28 @@ pub(crate) fn install_forge(
 
   install_vanilla(game_version, instance_dir, emit)?;
   run_forge_installer(&installer_path, instance_dir, &full_version, emit)?;
+  Ok(())
+}
+
+pub(crate) fn install_neoforge(
+  game_version: &str,
+  loader_version: &str,
+  instance_dir: &Path,
+  emit: &dyn Fn(ProgressEvent),
+) -> Result<(), String> {
+  let installer_url = format!(
+    "{}/{}/neoforge-{}-installer.jar",
+    NEOFORGE_MAVEN_BASE,
+    loader_version,
+    loader_version
+  );
+  let installer_path = instance_dir
+    .join("installers")
+    .join(format!("neoforge-{}-installer.jar", loader_version));
+  download_zip_with_retry(&installer_url, &installer_path, "neoforge installer")?;
+
+  install_vanilla(game_version, instance_dir, emit)?;
+  run_neoforge_installer(&installer_path, instance_dir, loader_version, emit)?;
   Ok(())
 }
 
@@ -331,25 +354,7 @@ fn run_forge_installer(
       total: None,
       detail: None,
     });
-
-    let output = Command::new("java")
-      .arg("-jar")
-      .arg(installer_path)
-      .arg("--installClient")
-      .current_dir(instance_dir)
-      .output()
-      .map_err(|err| format!("failed to run forge installer: {}", err))?;
-
-    if !output.status.success() {
-      let stdout = String::from_utf8_lossy(&output.stdout);
-      let stderr = String::from_utf8_lossy(&output.stderr);
-      return Err(format!(
-        "forge installer failed (code {:?}): {} {}",
-        output.status.code(),
-        stdout.trim(),
-        stderr.trim()
-      ));
-    }
+    run_java_installer(installer_path, instance_dir, "forge")?;
   }
 
   if forge_json_path.exists() {
@@ -360,6 +365,67 @@ fn run_forge_installer(
   }
 
   Ok(())
+}
+
+fn run_neoforge_installer(
+  installer_path: &Path,
+  instance_dir: &Path,
+  loader_version: &str,
+  emit: &dyn Fn(ProgressEvent),
+) -> Result<(), String> {
+  let neoforge_version_id = format!("neoforge-{}", loader_version);
+  let neoforge_json_path = instance_dir
+    .join("versions")
+    .join(&neoforge_version_id)
+    .join(format!("{}.json", neoforge_version_id));
+
+  if !neoforge_json_path.exists() {
+    emit(ProgressEvent {
+      stage: "neoforge".to_string(),
+      message: "Running NeoForge installer".to_string(),
+      current: 0,
+      total: None,
+      detail: None,
+    });
+    run_java_installer(installer_path, instance_dir, "neoforge")?;
+  }
+
+  if neoforge_json_path.exists() {
+    if let Ok(profile) = load_json::<ForgeProfile>(&neoforge_json_path) {
+      let libraries_dir = instance_dir.join("libraries");
+      download_profile_libraries(&profile.libraries, &libraries_dir, emit)?;
+    }
+  }
+
+  Ok(())
+}
+
+fn run_java_installer(
+  installer_path: &Path,
+  instance_dir: &Path,
+  loader_label: &str,
+) -> Result<(), String> {
+  let output = Command::new("java")
+    .arg("-jar")
+    .arg(installer_path)
+    .arg("--installClient")
+    .current_dir(instance_dir)
+    .output()
+    .map_err(|err| format!("failed to run {} installer: {}", loader_label, err))?;
+
+  if output.status.success() {
+    return Ok(());
+  }
+
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  Err(format!(
+    "{} installer failed (code {:?}): {} {}",
+    loader_label,
+    output.status.code(),
+    stdout.trim(),
+    stderr.trim()
+  ))
 }
 
 fn download_profile_libraries(

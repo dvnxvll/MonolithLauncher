@@ -154,6 +154,7 @@ export default function Overview() {
           </div>
           <Button
             onClick={() => setShowDialog(true)}
+            data-tip-id="overview-create-instance"
             className="bg-primary text-primary-foreground hover:bg-primary/90 gap-2 h-11"
             disabled={loading}
           >
@@ -186,6 +187,7 @@ export default function Overview() {
                 <input
                   value={instanceQuery}
                   onChange={(event) => setInstanceQuery(event.target.value)}
+                  data-tip-id="overview-instance-search"
                   placeholder="Search instances..."
                   className="w-full bg-input border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
                 />

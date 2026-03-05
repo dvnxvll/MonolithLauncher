@@ -9,9 +9,13 @@ import Titlebar from '@/components/titlebar';
 import { LauncherProvider } from '@/components/launcher-provider';
 import { Toaster } from '@/components/ui/toaster';
 import InstallOverlay from '@/components/install-overlay';
+import NewUserTips from '@/components/new-user-tips';
+import UpdateNotifier from '@/components/update-notifier';
 
 export default function Home() {
-  const [currentPage, setCurrentPage] = useState('overview');
+  const [currentPage, setCurrentPage] = useState<
+    "overview" | "account" | "settings"
+  >("overview");
   const useNativeTitlebar = process.env.NEXT_PUBLIC_USE_NATIVE_TITLEBAR === '1';
 
   useEffect(() => {
@@ -28,6 +32,7 @@ export default function Home() {
     <LauncherProvider>
       <div className="flex h-full flex-col bg-background text-foreground dark">
         {useNativeTitlebar ? null : <Titlebar />}
+        <UpdateNotifier />
         <div className="flex min-h-0 flex-1 overflow-hidden">
           <Sidebar currentPage={currentPage} setCurrentPage={setCurrentPage} />
           <main className="flex-1 min-h-0 overflow-hidden flex flex-col">
@@ -37,6 +42,7 @@ export default function Home() {
           </main>
         </div>
         <InstallOverlay />
+        <NewUserTips currentPage={currentPage} setCurrentPage={setCurrentPage} />
         <Toaster />
       </div>
     </LauncherProvider>

@@ -1,0 +1,23 @@
+FROM rust:bullseye
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  curl \
+  g++-mingw-w64-x86-64 \
+  gcc-mingw-w64-x86-64 \
+  mingw-w64 \
+  nsis \
+  pkg-config \
+  unzip \
+  xz-utils \
+  zip \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:${PATH}"
+
+RUN cargo install tauri-cli --locked --version "^2.0.0"
+
+WORKDIR /workspace
+COPY . /workspace
+
+CMD ["bash", "builder/scripts/build-windows.sh"]

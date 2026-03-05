@@ -166,6 +166,7 @@ pub enum Loader {
   Vanilla,
   Fabric,
   Forge,
+  NeoForge,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -178,6 +179,8 @@ pub struct Settings {
   pub theme: String,
   #[serde(default = "default_microsoft_client_id")]
   pub microsoft_client_id: String,
+  #[serde(default)]
+  pub skipped_release_tag: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -187,6 +190,8 @@ pub struct PackSync {
   pub shaderpacks: bool,
   pub texturepacks: bool,
   pub server_list: bool,
+  #[serde(default = "default_pack_sync_options_txt")]
+  pub options_txt: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -344,6 +349,7 @@ impl AppConfig {
           shaderpacks: false,
           texturepacks: true,
           server_list: true,
+          options_txt: true,
         },
         apply_to_new_instances: true,
         java: JavaSettings {
@@ -362,6 +368,7 @@ impl AppConfig {
         },
         theme: "dark".to_string(),
         microsoft_client_id: default_microsoft_client_id(),
+        skipped_release_tag: None,
       },
     }
   }
@@ -381,6 +388,10 @@ fn default_max_ram_mb() -> u32 {
 
 fn default_microsoft_client_id() -> String {
   "f6a09c4f-4f6d-4aad-972e-e770de1ef9c8".to_string()
+}
+
+fn default_pack_sync_options_txt() -> bool {
+  true
 }
 
 fn normalize_microsoft_client_id(config: &mut AppConfig) {

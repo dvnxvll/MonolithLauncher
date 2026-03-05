@@ -1,6 +1,13 @@
 import type { ReactNode } from "react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface InstanceSettingsPanelProps {
   breadcrumbs: ReactNode;
@@ -21,6 +28,12 @@ interface InstanceSettingsPanelProps {
   onJvmArgsChange: (value: string) => void;
   onSaveSettings: () => void;
   onResetSettings: () => void;
+  canEditLoaderVersion: boolean;
+  loaderVersion: string;
+  loaderVersionOptions: Array<{ version: string; recommended: boolean }>;
+  onLoaderVersionChange: (value: string) => void;
+  onSaveLoaderVersion: () => void;
+  savingLoaderVersion: boolean;
   onRepair: () => void;
   onDelete: () => void;
 }
@@ -44,6 +57,12 @@ export default function InstanceSettingsPanel({
   onJvmArgsChange,
   onSaveSettings,
   onResetSettings,
+  canEditLoaderVersion,
+  loaderVersion,
+  loaderVersionOptions,
+  onLoaderVersionChange,
+  onSaveLoaderVersion,
+  savingLoaderVersion,
   onRepair,
   onDelete,
 }: InstanceSettingsPanelProps) {
@@ -133,6 +152,51 @@ export default function InstanceSettingsPanel({
           </div>
         </div>
       </div>
+
+      {canEditLoaderVersion ? (
+        <div className="bg-card border border-border rounded-xl p-6">
+          <h3 className="text-lg font-bold mb-4">Loader Version</h3>
+          <div className="grid gap-3">
+            <Select value={loaderVersion || undefined} onValueChange={onLoaderVersionChange}>
+              <SelectTrigger className="w-full bg-input border border-border rounded-lg px-4 py-2 text-foreground focus:ring-2 focus:ring-ring">
+                <SelectValue placeholder="Select loader version" />
+              </SelectTrigger>
+              <SelectContent className="bg-card border-border text-foreground">
+                {loaderVersionOptions.map((entry) => (
+                  <SelectItem
+                    key={entry.version}
+                    value={entry.version}
+                    className="group"
+                  >
+                    <span className="inline-flex items-center gap-1.5">
+                      {entry.version}
+                      {entry.recommended ? (
+                        <span className="inline-flex items-center gap-1 rounded border border-yellow-300/50 bg-yellow-500/15 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-yellow-200 group-data-[highlighted]:border-yellow-700/60 group-data-[highlighted]:bg-yellow-300 group-data-[highlighted]:text-yellow-950">
+                          <Star size={12} fill="currentColor" />
+                          Recommended
+                        </span>
+                      ) : null}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-foreground/60">
+              Changing loader version clears installed loader metadata and reapplies
+              it on the next launch.
+            </p>
+            <div>
+              <Button
+                onClick={onSaveLoaderVersion}
+                disabled={savingLoaderVersion || !loaderVersion}
+                className="bg-primary text-primary-foreground hover:bg-primary/90"
+              >
+                {savingLoaderVersion ? "Saving..." : "Confirm Loader Version"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="bg-card border border-border rounded-xl p-6">
         <h3 className="text-lg font-bold mb-4">JVM Arguments</h3>

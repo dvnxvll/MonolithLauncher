@@ -603,6 +603,67 @@ fn install_modrinth_internal(
   })
 }
 
+fn collect_modrinth_records(
+  installs: &ModrinthInstallIndex,
+  project_type: &str,
+  world_id: Option<&str>,
+) -> Result<Vec<(String, Option<String>)>, String> {
+  let records = match project_type {
+    "mod" => installs
+      .mods
+      .iter()
+      .map(|(id, record)| (id.clone(), record.version.clone()))
+      .collect::<Vec<_>>(),
+    "resourcepack" => installs
+      .resources
+      .iter()
+      .map(|(id, record)| (id.clone(), record.version.clone()))
+      .collect::<Vec<_>>(),
+    "shader" => installs
+      .shaders
+      .iter()
+      .map(|(id, record)| (id.clone(), record.version.clone()))
+      .collect::<Vec<_>>(),
+    "datapack" => {
+      let world = world_id.ok_or_else(|| "world id is required for datapacks".to_string())?;
+      installs
+        .datapacks
+        .get(world)
+        .map(|entry| {
+          entry
+            .iter()
+            .map(|(id, record)| (id.clone(), record.version.clone()))
+            .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+    }
+    _ => return Err("unsupported Modrinth project type".to_string()),
+  };
+  Ok(records)
+}
+
+fn fetch_latest_project_version(
+  project_id: &str,
+  project_type: &str,
+  game_version: &str,
+  loader: Option<&str>,
+) -> Result<Option<String>, String> {
+  let mut url = format!("{}/project/{}/version", MODRINTH_BASE_URL, project_id);
+  let mut has_query = false;
+  if !game_version.is_empty() {
+    let versions_param = encode_json_param(&vec![game_version])?;
+    url.push_str(&format!("?game_versions={}", versions_param));
+    has_query = true;
+  }
+  if let Some(loader_value) = resolve_loader_filter(project_type, loader) {
+    let loaders_param = encode_json_param(&vec![loader_value])?;
+    url.push_str(if has_query { "&" } else { "?" });
+    url.push_str(&format!("loaders={}", loaders_param));
+  }
+  let versions: Vec<ModrinthVersion> = fetch_modrinth_json(&url)?;
+  Ok(select_version(&versions).map(|entry| entry.version_number.clone()))
+}
+
 #[tauri::command]
 pub(crate) fn list_modrinth_installs(
   instance_id: String,
@@ -629,6 +690,44 @@ pub(crate) fn list_modrinth_installs(
   };
   entries.sort();
   Ok(entries)
+}
+
+#[tauri::command]
+pub(crate) async fn list_modrinth_updates(
+  instance_id: String,
+  project_type: String,
+  game_version: String,
+  loader: Option<String>,
+  world_id: Option<String>,
+  state: State<'_, Mutex<ConfigStore>>,
+) -> Result<Vec<String>, String> {
+  let instance_dir = resolve_instance_dir(&instance_id, &state)?;
+  tauri::async_runtime::spawn_blocking(move || {
+    let installs = load_modrinth_index(&instance_dir)?;
+    let records = collect_modrinth_records(&installs, &project_type, world_id.as_deref())?;
+    let mut updates = Vec::new();
+
+    for (project_id, installed_version) in records {
+      let latest = match fetch_latest_project_version(
+        &project_id,
+        &project_type,
+        &game_version,
+        loader.as_deref(),
+      ) {
+        Ok(version) => version,
+        Err(_) => continue,
+      };
+      let Some(latest_version) = latest else { continue };
+      if installed_version.as_deref() != Some(latest_version.as_str()) {
+        updates.push(project_id);
+      }
+    }
+
+    updates.sort();
+    Ok(updates)
+  })
+  .await
+  .map_err(|_| "Modrinth update task failed".to_string())?
 }
 
 #[tauri::command]

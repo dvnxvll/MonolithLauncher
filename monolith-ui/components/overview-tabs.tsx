@@ -1,6 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type ChangeEvent,
+} from "react";
 import {
   Terminal,
   Package,
@@ -14,8 +19,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { getListen, invoke } from "@/lib/tauri";
 import type {
+  ForgeVersionSummary,
   Instance,
   InstanceMetrics,
+  LoaderVersionSummary,
   ModEntry,
   ModrinthProjectHit,
   PackEntry,
@@ -72,6 +79,8 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
       ? "fabric"
       : instance.loader === "forge"
         ? "forge"
+        : instance.loader === "neoforge"
+          ? "neoforge"
         : null;
   const buildDefaultFilters = (kind: ModrinthKind): ModrinthFilters => ({
     categories: [],
@@ -137,6 +146,14 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     shaders: [],
     datapacks: [],
   });
+  const [modrinthUpdates, setModrinthUpdates] = useState<
+    Record<ModrinthKind, string[]>
+  >({
+    mods: [],
+    resources: [],
+    shaders: [],
+    datapacks: [],
+  });
   const [modrinthBusy, setModrinthBusy] = useState<
     Record<string, "install" | "uninstall">
   >({});
@@ -161,13 +178,22 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     icon: null,
   });
   const [isRunning, setIsRunning] = useState(false);
-  const [memoryUsage, setMemoryUsage] = useState<number | null>(null);
-  const [memoryHistory, setMemoryHistory] = useState<number[]>([]);
+  const [memoryUsageMb, setMemoryUsageMb] = useState<number | null>(null);
+  const [cpuLoadPct, setCpuLoadPct] = useState<number | null>(null);
+  const [gpuLoadPct, setGpuLoadPct] = useState<number | null>(null);
+  const [metricHistory, setMetricHistory] = useState<InstanceMetrics[]>([]);
   const [instanceNameState, setInstanceNameState] = useState(instance.name);
   const [minRamMb, setMinRamMb] = useState(512);
   const [maxRamMb, setMaxRamMb] = useState(1024);
   const [ramUnit, setRamUnit] = useState<"mb" | "gb">("mb");
   const [jvmArgs, setJvmArgs] = useState("");
+  const [loaderVersions, setLoaderVersions] = useState<
+    Array<LoaderVersionSummary | ForgeVersionSummary>
+  >([]);
+  const [loaderVersionState, setLoaderVersionState] = useState(
+    instance.loader_version ?? "",
+  );
+  const [savingLoaderVersion, setSavingLoaderVersion] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteConfirmName, setDeleteConfirmName] = useState("");
   const [tableFilters, setTableFilters] = useState<Record<FilterKey, string>>({
@@ -203,6 +229,20 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     if (!datapackWorldId) return null;
     return worlds.find((world) => world.id === datapackWorldId)?.name ?? null;
   }, [datapackWorldId, worlds]);
+  const recommendedLoaderVersion = useMemo(() => {
+    if (loaderVersions.length === 0) return "";
+    if (instance.loader === "fabric") {
+      const stable = loaderVersions.find(
+        (entry): entry is LoaderVersionSummary =>
+          "stable" in entry && entry.stable,
+      );
+      return stable?.version ?? loaderVersions[0]?.version ?? "";
+    }
+    const stable = loaderVersions.find(
+      (entry) => !/(alpha|beta|snapshot|rc)/i.test(entry.version),
+    );
+    return stable?.version ?? loaderVersions[0]?.version ?? "";
+  }, [instance.loader, loaderVersions]);
 
   const getFilter = (key: FilterKey) => tableFilters[key] ?? "";
   const setFilter = (key: FilterKey, value: string) => {
@@ -224,6 +264,8 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
 
   const resolveInstalledSet = (kind: ModrinthKind) =>
     new Set(modrinthInstalled[kind] ?? []);
+  const resolveUpdateSet = (kind: ModrinthKind) =>
+    new Set(modrinthUpdates[kind] ?? []);
 
   const isModrinthInstalling = (kind: ModrinthKind, projectId: string) =>
     modrinthBusy[`${kind}:${projectId}`] === "install";
@@ -236,9 +278,14 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     setMinRamMb(instance.java_min_ram_mb ?? defaults.minRam);
     setMaxRamMb(instance.java_max_ram_mb ?? defaults.maxRam);
     setJvmArgs(instance.jvm_args ?? defaults.jvmArgs);
+    setLoaderVersionState(instance.loader_version ?? "");
+    setLoaderVersions([]);
+    setSavingLoaderVersion(false);
     setIsRunning(false);
-    setMemoryUsage(null);
-    setMemoryHistory([]);
+    setMemoryUsageMb(null);
+    setCpuLoadPct(null);
+    setGpuLoadPct(null);
+    setMetricHistory([]);
     setDeleteConfirmName("");
     setShowDeleteModal(false);
     setEditingServerIndex(null);
@@ -256,6 +303,12 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     setModrinthDialogKind(null);
     setModrinthBusy({});
     setModrinthInstalled({
+      mods: [],
+      resources: [],
+      shaders: [],
+      datapacks: [],
+    });
+    setModrinthUpdates({
       mods: [],
       resources: [],
       shaders: [],
@@ -314,19 +367,25 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
         );
         if (!active) return;
         if (metrics && typeof metrics.rss_mb === "number") {
-          setMemoryUsage(metrics.rss_mb);
+          setMemoryUsageMb(metrics.rss_mb);
+          setCpuLoadPct(metrics.cpu_load_pct ?? null);
+          setGpuLoadPct(metrics.gpu_load_pct ?? null);
           setIsRunning(true);
-          setMemoryHistory((prev) => {
-            const next = [...prev, metrics.rss_mb];
-            return next.length > 80 ? next.slice(-80) : next;
+          setMetricHistory((prev) => {
+            const next = [...prev, metrics];
+            return next.length > 120 ? next.slice(-120) : next;
           });
         } else {
-          setMemoryUsage(null);
+          setMemoryUsageMb(null);
+          setCpuLoadPct(null);
+          setGpuLoadPct(null);
           setIsRunning(false);
         }
       } catch {
         if (!active) return;
-        setMemoryUsage(null);
+        setMemoryUsageMb(null);
+        setCpuLoadPct(null);
+        setGpuLoadPct(null);
       }
     }, 1000);
 
@@ -345,8 +404,10 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
       const endedId = payload.instance_id || payload.instanceId;
       if (endedId !== instanceId) return;
       setIsRunning(false);
-      setMemoryUsage(null);
-      setMemoryHistory([]);
+      setMemoryUsageMb(null);
+      setCpuLoadPct(null);
+      setGpuLoadPct(null);
+      setMetricHistory([]);
       appendInstanceLog(instanceId, "Instance closed.");
       setStatus("Instance closed.");
     }).then((stop: () => void) => {
@@ -453,7 +514,67 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     if (modrinthDialogKind !== "datapacks") return;
     if (!datapackWorldId) return;
     loadModrinthInstalls("datapacks", datapackWorldId);
+    loadModrinthUpdates("datapacks", datapackWorldId);
   }, [datapackWorldId, modrinthDialogKind]);
+
+  useEffect(() => {
+    if (activeTab !== "settings") return;
+    if (instance.loader === "vanilla") {
+      setLoaderVersions([]);
+      return;
+    }
+    let active = true;
+    const loadVersions = async () => {
+      try {
+        const versions =
+          instance.loader === "fabric"
+            ? await invoke<LoaderVersionSummary[]>("list_fabric_loader_versions", {
+                gameVersion: instance.version,
+                includeSnapshots: true,
+              })
+            : instance.loader === "neoforge"
+              ? await invoke<ForgeVersionSummary[]>("list_neoforge_versions", {
+                  gameVersion: instance.version,
+                })
+              : await invoke<ForgeVersionSummary[]>("list_forge_versions", {
+                  gameVersion: instance.version,
+                });
+        if (!active) return;
+        setLoaderVersions(versions || []);
+      } catch (err: any) {
+        if (!active) return;
+        setLoaderVersions([]);
+        const message = err?.toString?.() || "Failed to load loader versions.";
+        setStatus(message, "error");
+      }
+    };
+    loadVersions();
+    return () => {
+      active = false;
+    };
+  }, [activeTab, instance.loader, instance.version, setStatus]);
+
+  useEffect(() => {
+    if (instance.loader === "vanilla") return;
+    if (loaderVersions.length === 0) return;
+    const selected = loaderVersionState.trim();
+    if (selected && loaderVersions.some((entry) => entry.version === selected)) {
+      return;
+    }
+    const fallback =
+      instance.loader_version && loaderVersions.some((entry) => entry.version === instance.loader_version)
+        ? instance.loader_version
+        : recommendedLoaderVersion || loaderVersions[0]?.version || "";
+    if (fallback) {
+      setLoaderVersionState(fallback);
+    }
+  }, [
+    instance.loader,
+    instance.loader_version,
+    loaderVersionState,
+    loaderVersions,
+    recommendedLoaderVersion,
+  ]);
 
   const resolvePlayerName = () => {
     const activeId = config?.active_account_id;
@@ -551,7 +672,11 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     const sort = options?.sort ?? modrinthState[kind].sort;
     const filters = options?.filters ?? modrinthState[kind].filters;
     const limit = query.length === 0 ? 10 : 16;
-    const loader = null;
+    const loaderOverride = kind === "mods" ? filters.loaders : [];
+    const loader =
+      kind === "mods" && loaderOverride.length === 1
+        ? loaderOverride[0]
+        : modrinthLoader;
     const gameVersion = filters.showAllVersions ? "" : instance.version;
     const extraFacets = buildModrinthFacets(kind, filters);
     updateModrinthState(kind, { loading: true, error: null, query });
@@ -597,13 +722,48 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     }
   };
 
+  const loadModrinthUpdates = async (
+    kind: ModrinthKind,
+    worldIdOverride?: string,
+  ) => {
+    try {
+      const worldId =
+        kind === "datapacks" ? worldIdOverride ?? datapackWorldId : undefined;
+      const loaderOverride =
+        kind === "mods" ? modrinthState[kind].filters.loaders : [];
+      const loader =
+        kind === "mods" && loaderOverride.length === 1
+          ? loaderOverride[0]
+          : modrinthLoader;
+      const updates = await invoke<string[]>("list_modrinth_updates", {
+        instanceId,
+        projectType: resolveModrinthProjectType(kind),
+        gameVersion: instance.version,
+        loader: kind === "mods" ? loader : null,
+        worldId,
+      });
+      setModrinthUpdates((prev) => ({
+        ...prev,
+        [kind]: updates || [],
+      }));
+    } catch {
+      setModrinthUpdates((prev) => ({
+        ...prev,
+        [kind]: [],
+      }));
+    }
+  };
+
   const openModrinthDialog = async (kind: ModrinthKind) => {
     if (kind === "datapacks" && !datapackWorldId) {
       setStatus("Select a world before browsing datapacks.", "error");
       return;
     }
     setModrinthDialogKind(kind);
-    await loadModrinthInstalls(kind);
+    await Promise.all([
+      loadModrinthInstalls(kind),
+      loadModrinthUpdates(kind),
+    ]);
     await handleModrinthSearch(kind, {
       query: modrinthState[kind].query,
       sort: modrinthState[kind].sort,
@@ -632,6 +792,7 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     };
     updateModrinthState(kind, { filters: nextFilters });
     handleModrinthSearch(kind, { filters: nextFilters });
+    loadModrinthUpdates(kind);
   };
 
   const handleModrinthEnvironmentToggle = (
@@ -719,7 +880,10 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
           if (kind === "shaders") setShaders(data || []);
         }
       }
-      await loadModrinthInstalls(kind);
+      await Promise.all([
+        loadModrinthInstalls(kind),
+        loadModrinthUpdates(kind),
+      ]);
       setStatus(`${project.title} installed.`);
     } catch (err: any) {
       const message = err?.toString?.() || "Failed to install from Modrinth.";
@@ -768,7 +932,10 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
           if (kind === "shaders") setShaders(data || []);
         }
       }
-      await loadModrinthInstalls(kind);
+      await Promise.all([
+        loadModrinthInstalls(kind),
+        loadModrinthUpdates(kind),
+      ]);
       setStatus(`${project.title} removed.`);
     } catch (err: any) {
       const message =
@@ -802,8 +969,10 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     try {
       await invoke("stop_instance", { instanceId });
       setIsRunning(false);
-      setMemoryUsage(null);
-      setMemoryHistory([]);
+      setMemoryUsageMb(null);
+      setCpuLoadPct(null);
+      setGpuLoadPct(null);
+      setMetricHistory([]);
       appendInstanceLog(instanceId, "Stop signal sent.");
       setStatus("Stop signal sent.");
     } catch (err: any) {
@@ -816,8 +985,10 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     try {
       await invoke("kill_instance", { instanceId });
       setIsRunning(false);
-      setMemoryUsage(null);
-      setMemoryHistory([]);
+      setMemoryUsageMb(null);
+      setCpuLoadPct(null);
+      setGpuLoadPct(null);
+      setMetricHistory([]);
       appendInstanceLog(instanceId, "Kill signal sent.");
       setStatus("Kill signal sent.");
     } catch (err: any) {
@@ -957,6 +1128,14 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
   const displayMaxRam =
     ramUnit === "gb" ? Number((maxRamMb / 1024).toFixed(2)) : maxRamMb;
   const ramStep = ramUnit === "gb" ? 0.25 : 64;
+  const loaderVersionOptions = useMemo(
+    () =>
+      loaderVersions.map((entry) => ({
+        version: entry.version,
+        recommended: entry.version === recommendedLoaderVersion,
+      })),
+    [loaderVersions, recommendedLoaderVersion],
+  );
 
   const startEditWorld = (world: WorldEntry) => {
     setEditingWorldId(world.id);
@@ -1088,6 +1267,33 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     }
   };
 
+  const handleSaveLoaderVersion = async () => {
+    if (instance.loader === "vanilla") return;
+    const nextVersion = loaderVersionState.trim();
+    if (!nextVersion) {
+      setStatus("Select a loader version.", "error");
+      return;
+    }
+    if (nextVersion === (instance.loader_version ?? "")) {
+      setStatus("Loader version is unchanged.");
+      return;
+    }
+    try {
+      setSavingLoaderVersion(true);
+      await invoke("update_instance_loader_version", {
+        instanceId,
+        loaderVersion: nextVersion,
+      });
+      await refreshConfig();
+      setStatus("Loader version updated. Launch to reinstall loader files.");
+    } catch (err: any) {
+      const message = err?.toString?.() || "Failed to update loader version.";
+      setStatus(message, "error");
+    } finally {
+      setSavingLoaderVersion(false);
+    }
+  };
+
   const handleResetSettings = async () => {
     try {
       await invoke("update_instance_settings", {
@@ -1210,9 +1416,10 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
               onCopyLogs={handleCopyLogs}
               onClearLogs={handleClearLogs}
               consoleLogs={consoleLogs}
-              memoryUsage={memoryUsage}
-              memoryHistory={memoryHistory}
-              minRamMb={minRamMb}
+              memoryUsageMb={memoryUsageMb}
+              cpuLoadPct={cpuLoadPct}
+              gpuLoadPct={gpuLoadPct}
+              metricHistory={metricHistory}
               maxRamMb={maxRamMb}
             />
           )}
@@ -1376,6 +1583,12 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
               onJvmArgsChange={setJvmArgs}
               onSaveSettings={handleSaveSettings}
               onResetSettings={handleResetSettings}
+              canEditLoaderVersion={instance.loader !== "vanilla"}
+              loaderVersion={loaderVersionState}
+              loaderVersionOptions={loaderVersionOptions}
+              onLoaderVersionChange={setLoaderVersionState}
+              onSaveLoaderVersion={handleSaveLoaderVersion}
+              savingLoaderVersion={savingLoaderVersion}
               onRepair={handleRepairInstance}
               onDelete={() => setShowDeleteModal(true)}
             />
@@ -1448,6 +1661,7 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
                 : "Minecraft"
             }
             installedProjects={resolveInstalledSet(modrinthDialogKind)}
+            updateProjects={resolveUpdateSet(modrinthDialogKind)}
             onClose={() => setModrinthDialogKind(null)}
             onQueryChange={(value) =>
               updateModrinthState(modrinthDialogKind, { query: value })

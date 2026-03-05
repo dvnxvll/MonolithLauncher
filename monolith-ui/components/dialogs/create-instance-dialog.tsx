@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { X } from "lucide-react";
+import { Star, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -63,6 +63,20 @@ export default function CreateInstanceDialog({
   const displayMaxRam =
     ramUnit === "gb" ? Number((maxRamMb / 1024).toFixed(2)) : maxRamMb;
   const ramStep = ramUnit === "gb" ? 0.25 : 64;
+  const recommendedLoaderVersion = useMemo(() => {
+    if (loaderVersions.length === 0) return "";
+    if (loader === "fabric") {
+      const stable = loaderVersions.find(
+        (entry): entry is LoaderVersionSummary =>
+          "stable" in entry && entry.stable,
+      );
+      return stable?.version ?? loaderVersions[0]?.version ?? "";
+    }
+    const stable = loaderVersions.find(
+      (entry) => !/(alpha|beta|snapshot|rc)/i.test(entry.version),
+    );
+    return stable?.version ?? loaderVersions[0]?.version ?? "";
+  }, [loader, loaderVersions]);
 
   useEffect(() => {
     if (!open) return;
@@ -131,9 +145,13 @@ export default function CreateInstanceDialog({
                   includeSnapshots: true,
                 },
               )
-            : await invoke<ForgeVersionSummary[]>("list_forge_versions", {
-                gameVersion,
-              });
+            : loader === "neoforge"
+              ? await invoke<ForgeVersionSummary[]>("list_neoforge_versions", {
+                  gameVersion,
+                })
+              : await invoke<ForgeVersionSummary[]>("list_forge_versions", {
+                  gameVersion,
+                });
         if (cancelled) return;
         setLoaderVersions(versions);
         if (!versions.some((entry) => entry.version === loaderVersion)) {
@@ -268,6 +286,7 @@ export default function CreateInstanceDialog({
                 <SelectItem value="vanilla">Vanilla</SelectItem>
                 <SelectItem value="fabric">Fabric</SelectItem>
                 <SelectItem value="forge">Forge</SelectItem>
+                <SelectItem value="neoforge">NeoForge</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -280,7 +299,7 @@ export default function CreateInstanceDialog({
               <button
                 onClick={() => setIncludeSnapshots(!includeSnapshots)}
                 className={`relative w-10 h-6 rounded-full transition-all ${
-                  includeSnapshots ? "bg-accent" : "bg-muted"
+                  includeSnapshots ? "bg-emerald-500" : "bg-red-500"
                 }`}
               >
                 <div
@@ -350,9 +369,18 @@ export default function CreateInstanceDialog({
                     loader === "fabric" && "stable" in entry && !entry.stable
                       ? `${entry.version} (unstable)`
                       : entry.version;
+                  const recommended = entry.version === recommendedLoaderVersion;
                   return (
-                    <SelectItem key={entry.version} value={entry.version}>
-                      {label}
+                    <SelectItem key={entry.version} value={entry.version} className="group">
+                      <span className="inline-flex items-center gap-1.5">
+                        {label}
+                        {recommended ? (
+                          <span className="inline-flex items-center gap-1 rounded border border-yellow-300/50 bg-yellow-500/15 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-yellow-200 group-data-[highlighted]:border-yellow-700/60 group-data-[highlighted]:bg-yellow-300 group-data-[highlighted]:text-yellow-950">
+                            <Star size={12} fill="currentColor" />
+                            Recommended
+                          </span>
+                        ) : null}
+                      </span>
                     </SelectItem>
                   );
                 })}

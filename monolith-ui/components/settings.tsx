@@ -39,6 +39,7 @@ export default function Settings() {
     texturepacks: true,
     shaderpacks: true,
     server_list: true,
+    options_txt: true,
   });
   const [referenceInstance, setReferenceInstance] = useState("");
   const [jvmArgs, setJvmArgs] = useState("");
@@ -59,6 +60,7 @@ export default function Settings() {
       texturepacks: config.settings.pack_sync.texturepacks,
       shaderpacks: config.settings.pack_sync.shaderpacks,
       server_list: config.settings.pack_sync.server_list,
+      options_txt: config.settings.pack_sync.options_txt ?? true,
     });
     setReferenceInstance(config.settings.reference_instance_id ?? "");
     setJvmArgs(config.settings.java.jvm_args ?? "");
@@ -317,6 +319,7 @@ export default function Settings() {
           texturepacks: updates.texturepacks ?? syncOptions.texturepacks,
           shaderpacks: updates.shaderpacks ?? syncOptions.shaderpacks,
           server_list: updates.server_list ?? syncOptions.server_list,
+          options_txt: updates.options_txt ?? syncOptions.options_txt,
         },
       },
     };
@@ -367,7 +370,7 @@ export default function Settings() {
   const toggleSwitch = (isEnabled: boolean) => (
     <button
       className={`relative w-12 h-6 rounded-full transition-all ${
-        isEnabled ? "bg-accent" : "bg-muted"
+        isEnabled ? "bg-emerald-500" : "bg-red-500"
       }`}
     >
       <div
@@ -556,7 +559,10 @@ export default function Settings() {
                   value={selectedRuntimeId}
                   onValueChange={handleRuntimeSelection}
                 >
-                  <SelectTrigger className="w-full bg-input border border-border rounded-lg px-4 py-3 text-foreground focus:ring-2 focus:ring-accent font-mono text-sm">
+                  <SelectTrigger
+                    data-tip-id="settings-runtime-select"
+                    className="w-full bg-input border border-border rounded-lg px-4 py-3 text-foreground focus:ring-2 focus:ring-accent font-mono text-sm"
+                  >
                     <SelectValue placeholder="Select runtime" />
                   </SelectTrigger>
                   <SelectContent className="bg-card border-border text-foreground">
@@ -628,7 +634,10 @@ export default function Settings() {
             </div>
           </div>
 
-          <div className="bg-card border border-border rounded-xl p-6">
+          <div
+            data-tip-id="settings-sync-pack"
+            className="bg-card border border-border rounded-xl p-6"
+          >
             <div className="flex items-start justify-between mb-8">
               <div>
                 <h3 className="text-xl font-bold">Sync Pack</h3>
@@ -648,105 +657,125 @@ export default function Settings() {
               </button>
             </div>
 
-            {syncEnabled && (
-              <div className="space-y-4 border-t border-border pt-6">
-                <div className="grid grid-cols-2 gap-x-8 gap-y-4">
-                  {[
-                    { key: "resourcepacks", label: "Sync Resourcepacks" },
-                    { key: "texturepacks", label: "Sync Texturepacks" },
-                    { key: "shaderpacks", label: "Sync Shaderpacks" },
-                    { key: "server_list", label: "Sync Server List" },
-                  ].map((option) => (
-                    <div
-                      key={option.key}
-                      className="flex items-center justify-between p-3 bg-secondary/20 rounded-lg border border-border"
-                    >
+            <div
+              data-tip-id="settings-sync-options"
+              className="space-y-4 border-t border-border pt-6"
+            >
+              <div>
+                <p className="text-sm font-bold uppercase tracking-widest text-foreground/70">
+                  Sync Options
+                </p>
+                {!syncEnabled ? (
+                  <p className="mt-2 text-sm text-foreground/60">
+                    Enable Sync Pack to configure shared resources and reference
+                    instance behavior.
+                  </p>
+                ) : null}
+              </div>
+              {syncEnabled ? (
+                <>
+                  <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+                    {[
+                      { key: "resourcepacks", label: "Sync Resourcepacks" },
+                      { key: "texturepacks", label: "Sync Texturepacks" },
+                      { key: "shaderpacks", label: "Sync Shaderpacks" },
+                      { key: "server_list", label: "Sync Server List" },
+                      { key: "options_txt", label: "Sync Options.txt" },
+                    ].map((option) => (
+                      <div
+                        key={option.key}
+                        className="flex items-center justify-between p-3 bg-secondary/20 rounded-lg border border-border"
+                      >
+                        <label className="text-sm font-medium">
+                          {option.label}
+                        </label>
+                        <button
+                          onClick={async () => {
+                            const next =
+                              !syncOptions[
+                                option.key as keyof typeof syncOptions
+                              ];
+                            setSyncOptions((prev) => ({
+                              ...prev,
+                              [option.key]: next,
+                            }));
+                            await updatePackSync({ [option.key]: next } as any);
+                          }}
+                        >
+                          {toggleSwitch(
+                            syncOptions[option.key as keyof typeof syncOptions],
+                          )}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="border-t border-border pt-6 space-y-4">
+                    <div className="flex items-center justify-between p-3 bg-secondary/20 rounded-lg border border-border">
                       <label className="text-sm font-medium">
-                        {option.label}
+                        Apply to new instances
                       </label>
                       <button
                         onClick={async () => {
-                          const next =
-                            !syncOptions[
-                              option.key as keyof typeof syncOptions
-                            ];
-                          setSyncOptions((prev) => ({
-                            ...prev,
-                            [option.key]: next,
-                          }));
-                          await updatePackSync({ [option.key]: next } as any);
+                          const next = !applyToNew;
+                          setApplyToNew(next);
+                          if (!config) return;
+                          const nextConfig = {
+                            ...config,
+                            settings: {
+                              ...config.settings,
+                              apply_to_new_instances: next,
+                            },
+                          };
+                          await saveConfig(nextConfig);
+                          setStatus("Apply-to-new setting updated.");
                         }}
                       >
-                        {toggleSwitch(
-                          syncOptions[option.key as keyof typeof syncOptions],
-                        )}
+                        {toggleSwitch(applyToNew)}
                       </button>
                     </div>
-                  ))}
-                </div>
 
-                <div className="border-t border-border pt-6 space-y-4">
-                  <div className="flex items-center justify-between p-3 bg-secondary/20 rounded-lg border border-border">
-                    <label className="text-sm font-medium">
-                      Apply to new instances
-                    </label>
-                    <button
-                      onClick={async () => {
-                        const next = !applyToNew;
-                        setApplyToNew(next);
-                        if (!config) return;
-                        const nextConfig = {
-                          ...config,
-                          settings: {
-                            ...config.settings,
-                            apply_to_new_instances: next,
-                          },
-                        };
-                        await saveConfig(nextConfig);
-                        setStatus("Apply-to-new setting updated.");
-                      }}
-                    >
-                      {toggleSwitch(applyToNew)}
-                    </button>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-bold uppercase tracking-widest text-foreground/70 mb-3">
-                      Reference Instance
-                    </label>
-                    <Select
-                      value={referenceInstance || "none"}
-                      onValueChange={(value) =>
-                        handleReferenceInstanceChange(
-                          value === "none" ? "" : value,
-                        )
-                      }
-                    >
-                      <SelectTrigger className="w-full bg-input border border-border rounded-lg px-4 py-3 text-foreground focus:ring-2 focus:ring-accent font-mono text-sm">
-                        <SelectValue placeholder="Select reference instance" />
-                      </SelectTrigger>
-                      <SelectContent className="bg-card border-border text-foreground">
-                        <SelectItem value="none" className="font-mono text-sm">
-                          No reference instance
-                        </SelectItem>
-                        {instances.map((inst) => (
-                          <SelectItem
-                            key={inst.id}
-                            value={inst.id}
-                            className="font-mono text-sm"
-                          >
-                            {inst.name}
+                    <div>
+                      <label className="block text-sm font-bold uppercase tracking-widest text-foreground/70 mb-3">
+                        Reference Instance
+                      </label>
+                      <Select
+                        value={referenceInstance || "none"}
+                        onValueChange={(value) =>
+                          handleReferenceInstanceChange(
+                            value === "none" ? "" : value,
+                          )
+                        }
+                      >
+                        <SelectTrigger className="w-full bg-input border border-border rounded-lg px-4 py-3 text-foreground focus:ring-2 focus:ring-accent font-mono text-sm">
+                          <SelectValue placeholder="Select reference instance" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-card border-border text-foreground">
+                          <SelectItem value="none" className="font-mono text-sm">
+                            No reference instance
                           </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                          {instances.map((inst) => (
+                            <SelectItem
+                              key={inst.id}
+                              value={inst.id}
+                              className="font-mono text-sm"
+                            >
+                              {inst.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
-                </div>
-              </div>
-            )}
+                </>
+              ) : null}
+            </div>
           </div>
 
-          <div className="bg-card border border-border rounded-xl p-6">
+          <div
+            data-tip-id="settings-jvm-settings"
+            className="bg-card border border-border rounded-xl p-6"
+          >
             <h3 className="text-xl font-bold mb-1">JVM Settings</h3>
             <p className="text-sm text-foreground/60 mb-8">
               Configure Java Virtual Machine options

@@ -14,6 +14,8 @@ export const resolveLoaderLabel = (loader: LoaderKind | string) => {
       return "Fabric";
     case "forge":
       return "Forge";
+    case "neoforge":
+      return "NeoForge";
     default:
       return loader || "Unknown";
   }

@@ -1,5 +1,5 @@
 use crate::config::{AppConfig, Instance, InstanceManifest, Loader, INSTANCE_CONFIG_FILE};
-use crate::minecraft::install::{install_fabric, install_forge, install_vanilla};
+use crate::minecraft::install::{install_fabric, install_forge, install_neoforge, install_vanilla};
 use crate::minecraft::models::{InstallState, NewInstanceRequest, ProgressEvent};
 use std::{fs, path::Path, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
 
@@ -20,7 +20,7 @@ pub fn create_instance(
     return Err("instance name already exists".to_string());
   }
 
-  if matches!(request.loader, Loader::Fabric | Loader::Forge)
+  if matches!(request.loader, Loader::Fabric | Loader::Forge | Loader::NeoForge)
     && request.loader_version.is_none()
   {
     return Err("loader version is required".to_string());
@@ -110,6 +110,13 @@ pub fn ensure_instance_ready(
         .clone()
         .ok_or_else(|| "forge version is required".to_string())?;
       install_forge(&instance.version, &loader_version, &instance_dir, emit)?;
+    }
+    Loader::NeoForge => {
+      let loader_version = instance
+        .loader_version
+        .clone()
+        .ok_or_else(|| "neoforge version is required".to_string())?;
+      install_neoforge(&instance.version, &loader_version, &instance_dir, emit)?;
     }
   }
 

@@ -57,6 +57,7 @@ interface ModrinthDialogProps {
   instanceVersion: string;
   loaderLabel: string;
   installedProjects: Set<string>;
+  updateProjects: Set<string>;
   onClose: () => void;
   onQueryChange: (value: string) => void;
   onSearch: () => void;
@@ -135,6 +136,7 @@ export default function ModrinthDialog({
   instanceVersion,
   loaderLabel,
   installedProjects,
+  updateProjects,
   onClose,
   onQueryChange,
   onSearch,
@@ -376,6 +378,8 @@ export default function ModrinthDialog({
             <div className="space-y-3">
               {results.map((project) => {
                 const installed = installedProjects.has(project.project_id);
+                const updateAvailable =
+                  installed && updateProjects.has(project.project_id);
                 const installing = isInstalling(project.project_id);
                 const uninstalling = isUninstalling(project.project_id);
                 const busy = installing || uninstalling;
@@ -405,27 +409,40 @@ export default function ModrinthDialog({
                               Installed
                             </span>
                           ) : null}
+                          {updateAvailable ? (
+                            <span className="ml-2 text-[10px] uppercase tracking-widest text-amber-300">
+                              Update Available
+                            </span>
+                          ) : null}
                         </div>
-                        <Button
-                          size="sm"
-                          className={
-                            installed
-                              ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                              : "bg-primary text-primary-foreground hover:bg-primary/90"
-                          }
-                          onClick={() =>
-                            installed ? onUninstall(project) : onInstall(project)
-                          }
-                          disabled={busy}
-                        >
-                          {busy
-                            ? installed
-                              ? "Removing..."
-                              : "Installing..."
-                            : installed
-                              ? "Uninstall"
-                              : "Install"}
-                        </Button>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            className="bg-primary text-primary-foreground hover:bg-primary/90"
+                            onClick={() => onInstall(project)}
+                            disabled={busy || (installed && !updateAvailable)}
+                          >
+                            {busy && installing
+                              ? installed && updateAvailable
+                                ? "Updating..."
+                                : "Installing..."
+                              : installed
+                                ? updateAvailable
+                                  ? "Update"
+                                  : "Installed"
+                                : "Install"}
+                          </Button>
+                          {installed ? (
+                            <Button
+                              size="sm"
+                              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                              onClick={() => onUninstall(project)}
+                              disabled={busy}
+                            >
+                              {busy && uninstalling ? "Removing..." : "Uninstall"}
+                            </Button>
+                          ) : null}
+                        </div>
                       </div>
                       <p className="text-xs text-foreground/60 mt-1">
                         {project.description}

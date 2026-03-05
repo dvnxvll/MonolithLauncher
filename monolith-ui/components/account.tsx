@@ -196,6 +196,7 @@ export default function Account() {
           </div>
           <Button
             onClick={() => setShowDialog(true)}
+            data-tip-id="account-add-account"
             className="bg-primary text-primary-foreground hover:bg-primary/90 gap-2 h-11"
           >
             Add Account

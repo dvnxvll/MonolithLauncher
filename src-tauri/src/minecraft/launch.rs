@@ -11,13 +11,17 @@ use crate::minecraft::util::{
 };
 use crate::minecraft::{DEFAULT_LIBRARIES_URL};
 use std::{
-  collections::{HashMap, HashSet},
+  collections::{BTreeSet, HashMap, HashSet},
   env,
-  io::{BufRead, BufReader},
+  fs::{self, File},
+  io::{BufRead, BufReader, Read, Seek, SeekFrom},
+  net::ToSocketAddrs,
   path::{Path, PathBuf},
   process::{Command, Stdio},
+  sync::atomic::{AtomicBool, Ordering},
   sync::Arc,
   thread,
+  time::Duration,
 };
 
 pub fn launch_instance(
@@ -37,6 +41,7 @@ pub fn launch_instance(
   ensure_instance_ready(instance, emit)?;
 
   let instance_dir = PathBuf::from(&instance.directory);
+  apply_reference_sync(config, instance, &instance_dir, log.clone());
 
   let version_id = resolve_version_id(instance);
   let resolved = resolve_version_chain(&instance_dir, &version_id)?;
@@ -97,7 +102,7 @@ pub fn launch_instance(
     classpath: classpath.clone(),
     natives_dir: natives_dir.to_string_lossy().to_string(),
     launcher_name: "monolith".to_string(),
-    launcher_version: "0.1.0".to_string(),
+    launcher_version: env!("CARGO_PKG_VERSION").to_string(),
     version_type,
   };
 
@@ -151,15 +156,39 @@ pub fn launch_instance(
 
   let mut final_args = Vec::new();
   final_args.extend(jvm_args.into_iter().map(|arg| replace_tokens(arg, &context)));
+  let main_class_name = main_class.clone();
   final_args.push(main_class);
   final_args.extend(game_args.into_iter().map(|arg| replace_tokens(arg, &context)));
 
   let java_cmd = resolve_java_command(config, instance)?;
+  emit_launch_preamble(
+    log.clone(),
+    instance,
+    &context,
+    &java_cmd,
+    &main_class_name,
+    &final_args,
+  );
   let mut command = Command::new(&java_cmd);
-  command.args(final_args);
+  command.args(&final_args);
   command.current_dir(&instance_dir);
   command.stdout(Stdio::piped());
   command.stderr(Stdio::piped());
+  let log_files = vec![
+    instance_dir.join("logs").join("latest.log"),
+    instance_dir.join("logs").join("debug.log"),
+    instance_dir.join("logs").join("chat.log"),
+  ];
+  let mut log_offsets = HashMap::new();
+  for path in &log_files {
+    let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+    let offset = if file_name.eq_ignore_ascii_case("latest.log") {
+      0
+    } else {
+      std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0)
+    };
+    log_offsets.insert(path.clone(), offset);
+  }
   let mut child = command
     .spawn()
     .map_err(|err| format!("failed to launch java ({}): {}", java_cmd, err))?;
@@ -184,15 +213,304 @@ pub fn launch_instance(
     });
   }
 
+  let log_tail_active = Arc::new(AtomicBool::new(true));
+  {
+    let log = log.clone();
+    let active = log_tail_active.clone();
+    let files = log_files.clone();
+    let offsets = log_offsets;
+    thread::spawn(move || {
+      tail_log_files(files, offsets, active, log);
+    });
+  }
+
   let pid = child.id();
   if let Some(callback) = on_exit {
+    let active = log_tail_active.clone();
     thread::spawn(move || {
       let _ = child.wait();
+      active.store(false, Ordering::Relaxed);
       callback(pid);
+    });
+  } else {
+    let active = log_tail_active.clone();
+    thread::spawn(move || {
+      let _ = child.wait();
+      active.store(false, Ordering::Relaxed);
     });
   }
 
   Ok(pid)
+}
+
+fn emit_launch_preamble(
+  log: Arc<dyn Fn(&str, &str) + Send + Sync>,
+  instance: &Instance,
+  context: &LaunchContext,
+  java_cmd: &str,
+  main_class: &str,
+  final_args: &[String],
+) {
+  log(
+    "launcher",
+    &format!("Monolith Launcher version: {}", env!("CARGO_PKG_VERSION")),
+  );
+
+  let launch_mode = if !context.access_token.is_empty() && context.user_type != "offline" {
+    "online"
+  } else {
+    "offline"
+  };
+  log(
+    "launcher",
+    &format!("Launched instance in {} mode", launch_mode),
+  );
+
+  for host in [
+    "login.microsoftonline.com",
+    "session.minecraft.net",
+    "textures.minecraft.net",
+    "api.mojang.com",
+  ] {
+    let resolved = resolve_host_addresses(host);
+    if resolved.is_empty() {
+      log("launcher", &format!("{} resolves to: []", host));
+    } else {
+      log(
+        "launcher",
+        &format!("{} resolves to: [{}]", host, resolved.join(", ")),
+      );
+    }
+  }
+
+  log("launcher", &format!("Minecraft folder is: {}", context.game_dir));
+  log("launcher", &format!("Java path is: {}", java_cmd));
+  if let Some(version) = detect_java_version(java_cmd) {
+    log("launcher", &format!("Java version: {}", version));
+  }
+  log("launcher", &format!("Main Class: {}", main_class));
+  log("launcher", &format!("Native path: {}", context.natives_dir));
+  log("launcher", "Libraries:");
+  for entry in context.classpath.split(classpath_separator()) {
+    if entry.trim().is_empty() {
+      continue;
+    }
+    log("launcher", &format!("  {}", entry));
+  }
+
+  if let Some(main_index) = final_args.iter().position(|item| item == main_class) {
+    let java_args = &final_args[..main_index];
+    let game_args = if main_index + 1 < final_args.len() {
+      &final_args[main_index + 1..]
+    } else {
+      &[]
+    };
+
+    let mut java_args_clean = Vec::new();
+    for arg in java_args {
+      if arg.starts_with("-cp") || arg.contains(".jar") {
+        continue;
+      }
+      java_args_clean.push(arg.clone());
+    }
+    log(
+      "launcher",
+      &format!("Java Arguments: [{}]", java_args_clean.join(", ")),
+    );
+
+    let game_args_safe = redact_sensitive_args(game_args);
+    log("launcher", &format!("Params: {}", game_args_safe.join(" ")));
+  }
+
+  let mods_dir = PathBuf::from(&instance.directory).join("mods");
+  if mods_dir.is_dir() {
+    log("launcher", "Mods:");
+    if let Ok(entries) = fs::read_dir(mods_dir) {
+      for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.ends_with(".jar") && !name.ends_with(".disabled") {
+          continue;
+        }
+        let marker = if name.ends_with(".disabled") {
+          "off"
+        } else {
+          "on"
+        };
+        let trimmed = name.trim_end_matches(".disabled").trim_end_matches(".jar");
+        log("launcher", &format!("  [{}] {}", marker, trimmed));
+      }
+    }
+  }
+}
+
+fn resolve_host_addresses(host: &str) -> Vec<String> {
+  let mut values = BTreeSet::new();
+  if let Ok(addresses) = (host, 443).to_socket_addrs() {
+    for address in addresses {
+      values.insert(address.ip().to_string());
+    }
+  }
+  values.into_iter().collect()
+}
+
+fn detect_java_version(java_cmd: &str) -> Option<String> {
+  let output = Command::new(java_cmd).arg("-version").output().ok()?;
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  let line = stderr
+    .lines()
+    .chain(stdout.lines())
+    .find(|line| !line.trim().is_empty())?;
+  Some(line.trim().to_string())
+}
+
+fn redact_sensitive_args(args: &[String]) -> Vec<String> {
+  let mut redacted = Vec::with_capacity(args.len());
+  let mut redact_next = false;
+  for arg in args {
+    if redact_next {
+      redacted.push("<redacted>".to_string());
+      redact_next = false;
+      continue;
+    }
+    let lower = arg.to_lowercase();
+    if lower == "--accesstoken" || lower == "--clientid" || lower == "--xuid" {
+      redacted.push(arg.clone());
+      redact_next = true;
+      continue;
+    }
+    if lower.starts_with("--accesstoken=")
+      || lower.starts_with("--clientid=")
+      || lower.starts_with("--xuid=")
+    {
+      let key = arg.split('=').next().unwrap_or(arg.as_str());
+      redacted.push(format!("{}=<redacted>", key));
+      continue;
+    }
+    redacted.push(arg.clone());
+  }
+  redacted
+}
+
+fn apply_reference_sync(
+  config: &AppConfig,
+  instance: &Instance,
+  instance_dir: &Path,
+  log: Arc<dyn Fn(&str, &str) + Send + Sync>,
+) {
+  let sync = &config.settings.pack_sync;
+  if !sync.enabled {
+    return;
+  }
+
+  let reference_id = match config.settings.reference_instance_id.as_ref() {
+    Some(value) => value,
+    None => return,
+  };
+
+  if reference_id == &instance.id {
+    return;
+  }
+
+  let reference = match config
+    .instances
+    .iter()
+    .find(|candidate| &candidate.id == reference_id)
+  {
+    Some(value) => value,
+    None => {
+      log(
+        "launcher",
+        "Sync skipped: reference instance not found in configuration.",
+      );
+      return;
+    }
+  };
+
+  let reference_dir = PathBuf::from(&reference.directory);
+  if !reference_dir.exists() {
+    log(
+      "launcher",
+      "Sync skipped: reference instance directory does not exist.",
+    );
+    return;
+  }
+
+  if sync.resourcepacks {
+    if let Err(err) = sync_directory_contents(
+      &reference_dir.join("resourcepacks"),
+      &instance_dir.join("resourcepacks"),
+    ) {
+      log("launcher", &format!("Sync resourcepacks failed: {}", err));
+    }
+  }
+  if sync.texturepacks {
+    if let Err(err) = sync_directory_contents(
+      &reference_dir.join("texturepacks"),
+      &instance_dir.join("texturepacks"),
+    ) {
+      log("launcher", &format!("Sync texturepacks failed: {}", err));
+    }
+  }
+  if sync.shaderpacks {
+    if let Err(err) = sync_directory_contents(
+      &reference_dir.join("shaderpacks"),
+      &instance_dir.join("shaderpacks"),
+    ) {
+      log("launcher", &format!("Sync shaderpacks failed: {}", err));
+    }
+  }
+  if sync.server_list {
+    if let Err(err) = sync_file_if_exists(
+      &reference_dir.join("servers.dat"),
+      &instance_dir.join("servers.dat"),
+    ) {
+      log("launcher", &format!("Sync servers.dat failed: {}", err));
+    }
+  }
+  if sync.options_txt {
+    if let Err(err) = sync_file_if_exists(
+      &reference_dir.join("options.txt"),
+      &instance_dir.join("options.txt"),
+    ) {
+      log("launcher", &format!("Sync options.txt failed: {}", err));
+    }
+  }
+}
+
+fn sync_directory_contents(source_dir: &Path, target_dir: &Path) -> Result<(), String> {
+  if !source_dir.is_dir() {
+    return Ok(());
+  }
+  fs::create_dir_all(target_dir).map_err(|err| err.to_string())?;
+
+  let entries = fs::read_dir(source_dir).map_err(|err| err.to_string())?;
+  for entry in entries {
+    let entry = entry.map_err(|err| err.to_string())?;
+    let source_path = entry.path();
+    let target_path = target_dir.join(entry.file_name());
+    let file_type = entry.file_type().map_err(|err| err.to_string())?;
+    if file_type.is_dir() {
+      sync_directory_contents(&source_path, &target_path)?;
+      continue;
+    }
+    if file_type.is_file() {
+      fs::copy(&source_path, &target_path).map_err(|err| err.to_string())?;
+    }
+  }
+
+  Ok(())
+}
+
+fn sync_file_if_exists(source_file: &Path, target_file: &Path) -> Result<(), String> {
+  if !source_file.is_file() {
+    return Ok(());
+  }
+  if let Some(parent) = target_file.parent() {
+    fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+  }
+  fs::copy(source_file, target_file).map_err(|err| err.to_string())?;
+  Ok(())
 }
 
 fn resolve_version_id(instance: &Instance) -> String {
@@ -216,6 +534,66 @@ fn resolve_version_id(instance: &Instance) -> String {
       };
       format!("forge-{}", full_version)
     }
+    Loader::NeoForge => instance
+      .loader_version
+      .as_ref()
+      .map(|loader| format!("neoforge-{}", loader))
+      .unwrap_or_else(|| instance.version.clone()),
+  }
+}
+
+fn tail_log_files(
+  paths: Vec<PathBuf>,
+  initial_offsets: HashMap<PathBuf, u64>,
+  active: Arc<AtomicBool>,
+  log: Arc<dyn Fn(&str, &str) + Send + Sync>,
+) {
+  let mut offsets = initial_offsets;
+  let mut pending: HashMap<PathBuf, String> = HashMap::new();
+  for path in &paths {
+    pending.entry(path.clone()).or_default();
+    offsets.entry(path.clone()).or_insert(0);
+  }
+
+  while active.load(Ordering::Relaxed) {
+    for path in &paths {
+      if let Ok(mut file) = File::open(path) {
+        if let Ok(meta) = file.metadata() {
+          let len = meta.len();
+          let offset = offsets.entry(path.clone()).or_insert(0);
+          let pending_buf = pending.entry(path.clone()).or_default();
+
+          if len < *offset {
+            *offset = 0;
+            pending_buf.clear();
+          }
+
+          if len > *offset && file.seek(SeekFrom::Start(*offset)).is_ok() {
+            let mut chunk = String::new();
+            if file.read_to_string(&mut chunk).is_ok() && !chunk.is_empty() {
+              *offset = len;
+              pending_buf.push_str(&chunk);
+              while let Some(idx) = pending_buf.find('\n') {
+                let mut line = pending_buf[..idx].to_string();
+                if line.ends_with('\r') {
+                  line.pop();
+                }
+                if !line.trim().is_empty() {
+                  let stream = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("log");
+                  log(stream, &line);
+                }
+                *pending_buf = pending_buf[idx + 1..].to_string();
+              }
+            }
+          }
+        }
+      }
+    }
+
+    thread::sleep(Duration::from_millis(250));
   }
 }
 

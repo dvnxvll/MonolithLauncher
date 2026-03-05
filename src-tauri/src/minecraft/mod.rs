@@ -14,6 +14,7 @@ pub use models::{
 };
 pub use versions::{
   list_fabric_game_versions, list_fabric_loader_versions, list_forge_versions,
+  list_neoforge_versions,
   list_vanilla_versions,
 };
 
@@ -22,5 +23,8 @@ const MOJANG_MANIFEST_URL: &str =
 const FABRIC_GAME_VERSIONS_URL: &str = "https://meta.fabricmc.net/v2/versions/game";
 const FABRIC_LOADER_URL: &str = "https://meta.fabricmc.net/v2/versions/loader";
 const FORGE_INDEX_BASE: &str = "https://files.minecraftforge.net/net/minecraftforge/forge";
+const NEOFORGE_MAVEN_METADATA_URL: &str =
+  "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml";
+const NEOFORGE_MAVEN_BASE: &str = "https://maven.neoforged.net/releases/net/neoforged/neoforge";
 const RESOURCES_BASE_URL: &str = "https://resources.download.minecraft.net";
 const DEFAULT_LIBRARIES_URL: &str = "https://libraries.minecraft.net/";

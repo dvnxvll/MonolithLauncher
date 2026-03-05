@@ -1,4 +1,4 @@
-export type LoaderKind = "vanilla" | "fabric" | "forge";
+export type LoaderKind = "vanilla" | "fabric" | "forge" | "neoforge";
 
 export interface Account {
   id: string;
@@ -39,6 +39,7 @@ export interface PackSync {
   shaderpacks: boolean;
   texturepacks: boolean;
   server_list: boolean;
+  options_txt: boolean;
 }
 
 export interface JavaRuntime {
@@ -75,6 +76,7 @@ export interface Settings {
   java: JavaSettings;
   theme: string;
   microsoft_client_id: string;
+  skipped_release_tag?: string | null;
 }
 
 export interface AppConfig {
@@ -151,6 +153,8 @@ export interface ModrinthProjectHit {
 
 export interface InstanceMetrics {
   rss_mb: number;
+  cpu_load_pct: number;
+  gpu_load_pct?: number | null;
 }
 
 export interface ProgressEvent {

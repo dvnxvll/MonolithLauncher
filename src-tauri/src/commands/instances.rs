@@ -167,7 +167,10 @@ pub(crate) fn import_instance(
   show_snapshots: bool,
   root_id: Option<String>,
 ) -> Result<(), String> {
-  if matches!(loader, config::Loader::Fabric | config::Loader::Forge)
+  if matches!(
+    loader,
+    config::Loader::Fabric | config::Loader::Forge | config::Loader::NeoForge
+  )
     && loader_version.is_none()
   {
     return Err("loader version is required".to_string());
@@ -229,5 +232,41 @@ pub(crate) fn update_instance_settings(
     let trimmed = value.trim().to_string();
     if trimmed.is_empty() { None } else { Some(trimmed) }
   });
+  save_manifest(&manifest_path, &manifest)
+}
+
+#[tauri::command]
+pub(crate) fn update_instance_loader_version(
+  instance_id: String,
+  loader_version: Option<String>,
+  state: tauri::State<'_, Mutex<ConfigStore>>,
+) -> Result<(), String> {
+  let instance_dir = resolve_instance_dir(&instance_id, &state)?;
+  let manifest_path = instance_dir.join(INSTANCE_CONFIG_FILE);
+  if !manifest_path.exists() {
+    return Err("instance manifest missing".to_string());
+  }
+
+  let mut manifest = load_manifest(&manifest_path)?;
+  if matches!(manifest.loader, config::Loader::Vanilla) {
+    return Err("vanilla instances do not use loader versions".to_string());
+  }
+
+  let normalized = loader_version.and_then(|value| {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+      None
+    } else {
+      Some(trimmed.to_string())
+    }
+  });
+  if normalized.is_none() {
+    return Err("loader version is required".to_string());
+  }
+
+  manifest.loader_version = normalized;
+  manifest.installed_version = None;
+  manifest.installed_loader = None;
+  manifest.installed_loader_version = None;
   save_manifest(&manifest_path, &manifest)
 }

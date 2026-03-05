@@ -1,6 +1,7 @@
-import type { ReactNode } from "react";
+import { useState, type MouseEvent, type ReactNode } from "react";
 import { Copy, Play, SkipBack, Square, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import type { InstanceMetrics } from "@/lib/launcher-types";
 
 interface ConsolePanelProps {
   breadcrumbs: ReactNode;
@@ -12,11 +13,54 @@ interface ConsolePanelProps {
   onCopyLogs: () => void;
   onClearLogs: () => void;
   consoleLogs: string[];
-  memoryUsage: number | null;
-  memoryHistory: number[];
-  minRamMb: number;
+  memoryUsageMb: number | null;
+  cpuLoadPct: number | null;
+  gpuLoadPct: number | null;
   maxRamMb: number;
+  metricHistory: InstanceMetrics[];
 }
+
+const clampPercent = (value: number) => Math.max(0, Math.min(100, value));
+const clamp = (value: number, min: number, max: number) =>
+  Math.max(min, Math.min(max, value));
+
+const formatMemory = (valueMb: number | null) => {
+  if (valueMb === null) return "—";
+  if (valueMb >= 1024) return `${(valueMb / 1024).toFixed(1)} GB`;
+  return `${valueMb.toFixed(1)} MB`;
+};
+
+const buildPolylinePoints = (values: number[]) => {
+  if (values.length < 2) return "";
+  return values
+    .map((value, idx) => {
+      const x = (idx / (values.length - 1)) * 100;
+      const y = 40 - (clampPercent(value) / 100) * 40;
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
+};
+
+const resolveLogColorClass = (line: string) => {
+  const lower = line.toLowerCase();
+  if (
+    lower.includes("[stderr]") ||
+    lower.includes("/error]") ||
+    lower.includes(" error:")
+  ) {
+    return "text-red-300/95";
+  }
+  if (lower.includes("/warn]") || lower.includes(" warn")) {
+    return "text-amber-300/95";
+  }
+  if (lower.includes("[launcher]")) {
+    return "text-cyan-300/90";
+  }
+  if (lower.includes("[latest.log]")) {
+    return "text-emerald-300/90";
+  }
+  return "text-foreground/72";
+};
 
 export default function ConsolePanel({
   breadcrumbs,
@@ -28,11 +72,45 @@ export default function ConsolePanel({
   onCopyLogs,
   onClearLogs,
   consoleLogs,
-  memoryUsage,
-  memoryHistory,
-  minRamMb,
+  memoryUsageMb,
+  cpuLoadPct,
+  gpuLoadPct,
   maxRamMb,
+  metricHistory,
 }: ConsolePanelProps) {
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const ramSeries = metricHistory.map((sample) => {
+    if (maxRamMb <= 0) return 0;
+    return (sample.rss_mb / maxRamMb) * 100;
+  });
+  const cpuSeries = metricHistory.map((sample) => sample.cpu_load_pct ?? 0);
+  const gpuSeries = metricHistory.map((sample) => sample.gpu_load_pct ?? 0);
+
+  const ramPoints = buildPolylinePoints(ramSeries);
+  const cpuPoints = buildPolylinePoints(cpuSeries);
+  const gpuPoints = buildPolylinePoints(gpuSeries);
+  const hoverSample = hoverIndex !== null ? metricHistory[hoverIndex] ?? null : null;
+  const hoverPct =
+    hoverIndex !== null && metricHistory.length > 1
+      ? (hoverIndex / (metricHistory.length - 1)) * 100
+      : 0;
+  const hoverRamY =
+    hoverIndex !== null ? 40 - (clampPercent(ramSeries[hoverIndex] ?? 0) / 100) * 40 : null;
+  const hoverCpuY =
+    hoverIndex !== null ? 40 - (clampPercent(cpuSeries[hoverIndex] ?? 0) / 100) * 40 : null;
+  const hoverGpuY =
+    hoverIndex !== null ? 40 - (clampPercent(gpuSeries[hoverIndex] ?? 0) / 100) * 40 : null;
+
+  const handleGraphHover = (event: MouseEvent<SVGSVGElement>) => {
+    if (metricHistory.length < 2) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const localX = clamp(event.clientX - rect.left, 0, rect.width);
+    const ratio = localX / rect.width;
+    const nextIndex = Math.round(ratio * (metricHistory.length - 1));
+    setHoverIndex(nextIndex);
+  };
+
   return (
     <div className="flex flex-1 flex-col min-h-0 gap-4">
       {breadcrumbs}
@@ -86,19 +164,21 @@ export default function ConsolePanel({
         </p>
       )}
 
-      <div className="grid flex-1 min-h-0 grid-cols-1 xl:grid-cols-3 gap-4 items-stretch">
-        <div className="xl:col-span-2 bg-card border border-border rounded-lg p-4 flex flex-col h-full">
-          <p className="text-xs font-bold uppercase tracking-widest text-foreground/70 mb-3">
-            Instance Log
-          </p>
-          <div className="bg-input rounded-lg p-4 max-h-[360px] min-h-[160px] overflow-y-auto overflow-x-auto border border-border flex-1">
+      <div className="flex flex-1 min-h-0 flex-col gap-4">
+        <div className="bg-card border border-border rounded-lg p-4 flex flex-col h-[430px]">
+          <div className="mb-3 flex items-center gap-2">
+            <p className="text-xs font-bold uppercase tracking-widest text-foreground/70">
+              Instance Log
+            </p>
+          </div>
+          <div className="bg-input rounded-lg p-4 h-[370px] overflow-y-auto overflow-x-hidden border border-border">
             {consoleLogs.length === 0 ? (
               <p className="text-foreground/40 text-sm">No logs yet</p>
             ) : (
               consoleLogs.map((log, idx) => (
                 <p
                   key={idx}
-                  className="text-sm font-mono text-foreground/70 mb-1 whitespace-pre"
+                  className={`font-mono text-[11px] leading-[1.25] mb-1 whitespace-pre-wrap break-words pr-2 ${resolveLogColorClass(log)}`}
                 >
                   {log}
                 </p>
@@ -107,88 +187,150 @@ export default function ConsolePanel({
           </div>
         </div>
 
-        <div className="bg-card border border-border rounded-lg p-4 flex flex-col h-full w-full xl:col-span-1 xl:justify-self-start">
+        <div className="bg-card border border-border rounded-lg p-4 flex flex-col min-h-[240px]">
           <p className="text-xs font-bold uppercase tracking-widest text-foreground/70 mb-3">
-            Memory Graph
+            Resource Graph
           </p>
-          <div className="bg-input rounded-lg p-4 border border-border flex flex-col max-h-[360px] min-h-[160px]">
-            <div className="flex items-center justify-between text-xs text-foreground/60 mb-2">
-              <span>RAM (MB)</span>
-              <span>
-                {memoryUsage ? `${(memoryUsage / 1024).toFixed(1)} GB` : "—"}
+          <div className="bg-input rounded-lg p-4 border border-border flex flex-col h-full min-h-[180px]">
+            <div className="mb-2 flex flex-wrap items-center gap-3 text-[11px] uppercase tracking-widest text-foreground/70">
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "#7dd3fc" }} />
+                RAM {formatMemory(memoryUsageMb)}
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "rgba(255,255,255,0.8)" }} />
+                CPU {cpuLoadPct !== null ? `${cpuLoadPct.toFixed(0)}%` : "—"}
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "#f87171" }} />
+                GPU {gpuLoadPct !== null ? `${gpuLoadPct.toFixed(0)}%` : "—"}
               </span>
             </div>
-            <div className="flex-1 w-full min-h-[120px]">
-              {memoryHistory.length > 1 ? (
-                <svg
-                  viewBox="0 0 100 40"
-                  className="h-full w-full"
-                  preserveAspectRatio="none"
-                >
-                  {(() => {
-                    const maxRamLine = Math.max(maxRamMb, 0);
-                    const minRamLine = Math.max(minRamMb, 0);
-                    const maxValue = Math.max(
-                      ...memoryHistory,
-                      maxRamLine || 0,
-                      minRamLine || 0,
-                      1,
-                    );
-                    const toY = (value: number) =>
-                      40 - Math.min(40, Math.max(0, (value / maxValue) * 40));
-                    const points = memoryHistory
-                      .map((value, idx) => {
-                        const x = (idx / (memoryHistory.length - 1)) * 100;
-                        const y = toY(value);
-                        return `${x.toFixed(2)},${y.toFixed(2)}`;
-                      })
-                      .join(" ");
-                    const maxLineY = toY(maxRamLine);
-                    const minLineY = toY(minRamLine);
-                    return (
-                      <>
-                        <line
-                          x1="0"
-                          x2="100"
-                          y1={maxLineY}
-                          y2={maxLineY}
-                          stroke="rgba(255,255,255,0.2)"
-                          strokeDasharray="4 4"
-                        />
-                        <line
-                          x1="0"
-                          x2="100"
-                          y1={minLineY}
-                          y2={minLineY}
-                          stroke="rgba(255,255,255,0.12)"
-                          strokeDasharray="2 6"
-                        />
-                        <polyline
-                          points={points}
-                          fill="none"
-                          stroke="rgba(255,255,255,0.75)"
-                          strokeWidth="1.5"
-                        />
-                      </>
-                    );
-                  })()}
-                </svg>
+            <div className="relative flex-1 w-full min-h-[120px]">
+              {metricHistory.length > 1 ? (
+                <>
+                  <svg
+                    viewBox="0 0 100 40"
+                    className="h-full w-full"
+                    preserveAspectRatio="none"
+                    onMouseMove={handleGraphHover}
+                    onMouseLeave={() => setHoverIndex(null)}
+                  >
+                    <line
+                      x1="0"
+                      x2="100"
+                      y1="0"
+                      y2="0"
+                      stroke="rgba(255,255,255,0.08)"
+                      strokeDasharray="2 4"
+                    />
+                    <line
+                      x1="0"
+                      x2="100"
+                      y1="20"
+                      y2="20"
+                      stroke="rgba(255,255,255,0.08)"
+                      strokeDasharray="2 4"
+                    />
+                    <line
+                      x1="0"
+                      x2="100"
+                      y1="40"
+                      y2="40"
+                      stroke="rgba(255,255,255,0.08)"
+                      strokeDasharray="2 4"
+                    />
+                    {ramPoints ? (
+                      <polyline
+                        points={ramPoints}
+                        fill="none"
+                        stroke="#7dd3fc"
+                        strokeWidth="1"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    ) : null}
+                    {cpuPoints ? (
+                      <polyline
+                        points={cpuPoints}
+                        fill="none"
+                        stroke="rgba(255,255,255,0.8)"
+                        strokeWidth="1"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    ) : null}
+                    {gpuPoints ? (
+                      <polyline
+                        points={gpuPoints}
+                        fill="none"
+                        stroke="#f87171"
+                        strokeWidth="1"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    ) : null}
+                    {hoverSample ? (
+                      <line
+                        x1={hoverPct}
+                        x2={hoverPct}
+                        y1="0"
+                        y2="40"
+                        stroke="rgba(255,255,255,0.75)"
+                        strokeWidth="0.65"
+                        strokeDasharray="1.6 2.2"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    ) : null}
+                    {hoverSample && hoverRamY !== null ? (
+                      <circle
+                        cx={hoverPct}
+                        cy={hoverRamY}
+                        r="1.05"
+                        fill="#7dd3fc"
+                        stroke="rgba(0,0,0,0.55)"
+                        strokeWidth="0.35"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    ) : null}
+                    {hoverSample && hoverCpuY !== null ? (
+                      <circle
+                        cx={hoverPct}
+                        cy={hoverCpuY}
+                        r="1.05"
+                        fill="rgba(255,255,255,0.86)"
+                        stroke="rgba(0,0,0,0.55)"
+                        strokeWidth="0.35"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    ) : null}
+                    {hoverSample && hoverGpuY !== null ? (
+                      <circle
+                        cx={hoverPct}
+                        cy={hoverGpuY}
+                        r="1.05"
+                        fill="#f87171"
+                        stroke="rgba(0,0,0,0.55)"
+                        strokeWidth="0.35"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    ) : null}
+                  </svg>
+                  {hoverSample ? (
+                    <div
+                      className="pointer-events-none absolute top-2 -translate-x-1/2 rounded-md border border-border bg-card/95 px-2 py-1 text-[10px] uppercase tracking-widest text-foreground/85"
+                      style={{
+                        left: `clamp(90px, ${hoverPct}%, calc(100% - 90px))`,
+                      }}
+                    >
+                      <span className="mr-2">RAM {formatMemory(hoverSample.rss_mb)}</span>
+                      <span className="mr-2">
+                        CPU {(hoverSample.cpu_load_pct ?? 0).toFixed(1)}%
+                      </span>
+                      <span>GPU {(hoverSample.gpu_load_pct ?? 0).toFixed(1)}%</span>
+                    </div>
+                  ) : null}
+                </>
               ) : (
                 <div className="h-full w-full" aria-hidden="true" />
               )}
-            </div>
-            <div className="mt-2 flex items-center gap-3 text-[10px] text-foreground/50 uppercase tracking-widest">
-              <span className="flex items-center gap-1">
-                <span className="h-2 w-2 rounded-full bg-foreground/70" /> Usage
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="h-2 w-2 rounded-full bg-foreground/30" /> Max
-                RAM
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="h-2 w-2 rounded-full bg-foreground/20" /> Min
-                RAM
-              </span>
             </div>
           </div>
         </div>

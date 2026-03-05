@@ -5,8 +5,10 @@ use crate::minecraft::models::{
 };
 use crate::minecraft::{
   FABRIC_GAME_VERSIONS_URL, FABRIC_LOADER_URL, FORGE_INDEX_BASE, MOJANG_MANIFEST_URL,
+  NEOFORGE_MAVEN_BASE, NEOFORGE_MAVEN_METADATA_URL,
 };
 use regex::Regex;
+use std::cmp::Ordering;
 use std::collections::HashSet;
 
 pub fn list_vanilla_versions(include_snapshots: bool) -> Result<Vec<VersionSummary>, String> {
@@ -93,5 +95,61 @@ pub fn list_forge_versions(game_version: &str) -> Result<Vec<ForgeVersionSummary
     });
   }
 
+  results.sort_by(|a, b| compare_versions_desc(&a.version, &b.version));
   Ok(results)
+}
+
+pub fn list_neoforge_versions(game_version: &str) -> Result<Vec<ForgeVersionSummary>, String> {
+  let channel = game_version.strip_prefix("1.").unwrap_or(game_version);
+  let metadata = fetch_text(NEOFORGE_MAVEN_METADATA_URL)?;
+  let re = Regex::new(r"<version>([^<]+)</version>").map_err(|err| err.to_string())?;
+
+  let mut seen = HashSet::new();
+  let mut results = Vec::new();
+
+  for capture in re.captures_iter(&metadata) {
+    let version = capture.get(1).map(|m| m.as_str().trim()).unwrap_or_default();
+    if version.is_empty() || !version.starts_with(channel) || !seen.insert(version.to_string()) {
+      continue;
+    }
+    let installer_url = format!(
+      "{}/{}/neoforge-{}-installer.jar",
+      NEOFORGE_MAVEN_BASE,
+      version,
+      version
+    );
+    results.push(ForgeVersionSummary {
+      version: version.to_string(),
+      installer_url,
+    });
+  }
+
+  results.sort_by(|a, b| compare_versions_desc(&a.version, &b.version));
+  Ok(results)
+}
+
+fn compare_versions_desc(a: &str, b: &str) -> Ordering {
+  let extract_numbers = |value: &str| {
+    value
+      .split(|ch: char| !ch.is_ascii_digit())
+      .filter(|chunk| !chunk.is_empty())
+      .filter_map(|chunk| chunk.parse::<u32>().ok())
+      .collect::<Vec<_>>()
+  };
+
+  let a_numbers = extract_numbers(a);
+  let b_numbers = extract_numbers(b);
+  let max_len = a_numbers.len().max(b_numbers.len());
+
+  for idx in 0..max_len {
+    let av = *a_numbers.get(idx).unwrap_or(&0);
+    let bv = *b_numbers.get(idx).unwrap_or(&0);
+    match av.cmp(&bv) {
+      Ordering::Less => return Ordering::Greater,
+      Ordering::Greater => return Ordering::Less,
+      Ordering::Equal => {}
+    }
+  }
+
+  b.cmp(a)
 }

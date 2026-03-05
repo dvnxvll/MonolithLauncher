@@ -102,7 +102,7 @@ export default function PackTable({
                     <button
                       onClick={() => onToggle(item)}
                       className={`relative w-10 h-6 rounded-full transition-all ${
-                        item.enabled ? "bg-accent" : "bg-muted"
+                        item.enabled ? "bg-emerald-500" : "bg-red-500"
                       }`}
                     >
                       <div

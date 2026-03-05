@@ -76,7 +76,7 @@ export const LauncherProvider = ({
       const next = [...prev.launcher, `[${timestamp()}] ${message}`];
       return {
         ...prev,
-        launcher: next.length > 400 ? next.slice(-400) : next,
+        launcher: next.length > 5000 ? next.slice(-5000) : next,
       };
     });
   }, []);
@@ -87,7 +87,7 @@ export const LauncherProvider = ({
       const next = [...prev.game, `[${timestamp()}] ${message}`];
       return {
         ...prev,
-        game: next.length > 400 ? next.slice(-400) : next,
+        game: next.length > 5000 ? next.slice(-5000) : next,
       };
     });
   }, []);
@@ -103,7 +103,7 @@ export const LauncherProvider = ({
           instances: {
             ...prev.instances,
             [instanceId]:
-              nextLogs.length > 400 ? nextLogs.slice(-400) : nextLogs,
+              nextLogs.length > 5000 ? nextLogs.slice(-5000) : nextLogs,
           },
         };
       });
@@ -249,7 +249,11 @@ export const LauncherProvider = ({
       const line = payload.line;
       const stream = payload.stream;
       if (!instanceId || !line) return;
-      const prefix = stream === "stderr" ? "[stderr] " : "";
+      const normalizedStream = typeof stream === "string" ? stream.trim() : "";
+      const prefix =
+        normalizedStream && normalizedStream !== "stdout"
+          ? `[${normalizedStream}] `
+          : "";
       appendInstanceLog(instanceId, `${prefix}${line}`);
       appendGameLog(`${prefix}${line}`);
     }).then((unlisten: UnlistenFn) => {

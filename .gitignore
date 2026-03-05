@@ -1,8 +1,10 @@
-AGENTS.md
+**/*.md
+!**/*/README.md
 screenshots
 .ref
 .git
 .vscode
 minecraft-launcher-ui
 bun.lock
-.github
+outputs
+output

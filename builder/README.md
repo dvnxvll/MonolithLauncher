@@ -42,6 +42,8 @@ docker run --rm -v "$(pwd)/output:/workspace/output" monolith-builder-macos
 - Bundle builds are enabled by default. Set `TAURI_NO_BUNDLE=1` to skip bundle generation.
 - Linux builder enables `APPIMAGE_EXTRACT_AND_RUN=1` by default for Docker compatibility during AppImage bundling.
 - Linux builder accepts `TAURI_BUNDLES` (for example `deb,rpm`) to limit bundle targets.
+- Windows Docker builder is `exe`-only by default to avoid cross-NSIS/MSI failures.
+- Set `TAURI_WINDOWS_BUNDLE=1` to opt into Windows bundle generation.
 - Binary names are normalized to:
   - Linux: `monolith-launcher-v<version>-linux-<arch>`
   - Windows: `monolith-launcher-v<version>-windows-<arch>.exe`

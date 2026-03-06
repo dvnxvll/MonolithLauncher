@@ -10,6 +10,7 @@ TARGET_OS="windows"
 ARCH="${TARGET%%-*}"
 APP_VERSION="$(awk -F'\"' '/^version[[:space:]]*=/{print $2; exit}' "$ROOT_DIR/src-tauri/Cargo.toml")"
 OUTPUT_BASENAME="${APP_NAME}-v${APP_VERSION}-${TARGET_OS}-${ARCH}"
+WINDOWS_BUNDLE="${TAURI_WINDOWS_BUNDLE:-0}"
 NO_BUNDLE="${TAURI_NO_BUNDLE:-0}"
 HOST_UID="${HOST_UID:-}"
 HOST_GID="${HOST_GID:-}"
@@ -43,9 +44,9 @@ fi
 
 cd "$ROOT_DIR"
 BUILD_ARGS=(--target "$TARGET")
-if [ "$NO_BUNDLE" = "1" ]; then
+if [ "$WINDOWS_BUNDLE" != "1" ] || [ "$NO_BUNDLE" = "1" ]; then
   BUILD_ARGS+=(--no-bundle)
-  echo "Bundle build disabled via TAURI_NO_BUNDLE=1"
+  echo "Windows bundle build disabled (default). Set TAURI_WINDOWS_BUNDLE=1 to enable."
 fi
 NO_STRIP=1 cargo tauri build "${BUILD_ARGS[@]}"
 
@@ -64,7 +65,7 @@ if [ -n "$SOURCE_EXE" ] && [ -f "$SOURCE_EXE" ]; then
   cp "$SOURCE_EXE" "$OUTPUT_DIR/$OUTPUT_BASENAME.exe"
 fi
 
-if [ -d "$ROOT_DIR/src-tauri/target/$TARGET/release/bundle" ]; then
+if [ "$WINDOWS_BUNDLE" = "1" ] && [ "$NO_BUNDLE" != "1" ] && [ -d "$ROOT_DIR/src-tauri/target/$TARGET/release/bundle" ]; then
   mkdir -p "$OUTPUT_DIR/bundle"
   cp -r "$ROOT_DIR/src-tauri/target/$TARGET/release/bundle/." "$OUTPUT_DIR/bundle/"
 fi

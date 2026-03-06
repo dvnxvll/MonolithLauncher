@@ -36,6 +36,9 @@
 - Docker output ownership:
   - Linux, Windows, and macOS builder scripts now attempt to re-own generated artifacts to the mounted `output/` owner.
   - optional explicit ownership override via `HOST_UID` and `HOST_GID`.
+- Windows Docker cross-build packaging:
+  - builder now outputs raw `exe` by default (`--no-bundle`) to avoid NSIS/MSI cross-host failures.
+  - bundle generation is opt-in with `TAURI_WINDOWS_BUNDLE=1`.
 
 ### Changed
 - Project version bumped to `0.2.1` across backend and UI metadata.

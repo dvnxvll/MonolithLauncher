@@ -64,7 +64,7 @@ export default function Sidebar({ currentPage, setCurrentPage }: SidebarProps) {
       {/* Footer */}
       <div className="p-4 border-t border-sidebar-border text-xs text-sidebar-foreground/60">
         <div className="flex items-center justify-between">
-          <p>v0.2.0</p>
+          <p>v0.2.1</p>
           <button
             type="button"
             onClick={() => {

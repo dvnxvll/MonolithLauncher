@@ -279,7 +279,6 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     setMaxRamMb(instance.java_max_ram_mb ?? defaults.maxRam);
     setJvmArgs(instance.jvm_args ?? defaults.jvmArgs);
     setLoaderVersionState(instance.loader_version ?? "");
-    setLoaderVersions([]);
     setSavingLoaderVersion(false);
     setIsRunning(false);
     setMemoryUsageMb(null);
@@ -552,7 +551,14 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     return () => {
       active = false;
     };
-  }, [activeTab, instance.loader, instance.version, setStatus]);
+  }, [
+    activeTab,
+    instanceId,
+    instance.loader,
+    instance.version,
+    instance.loader_version,
+    setStatus,
+  ]);
 
   useEffect(() => {
     if (instance.loader === "vanilla") return;

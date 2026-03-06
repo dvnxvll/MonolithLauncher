@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Star, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,6 +28,24 @@ interface CreateInstanceDialogProps {
 
 type LoaderVersion = LoaderVersionSummary | ForgeVersionSummary;
 
+const pickRecommendedLoaderVersion = (
+  loader: LoaderKind,
+  versions: LoaderVersion[],
+) => {
+  if (versions.length === 0) return "";
+  if (loader === "fabric") {
+    const stable = versions.find(
+      (entry): entry is LoaderVersionSummary =>
+        "stable" in entry && entry.stable,
+    );
+    return stable?.version ?? versions[0]?.version ?? "";
+  }
+  const stable = versions.find(
+    (entry) => !/(alpha|beta|snapshot|rc)/i.test(entry.version),
+  );
+  return stable?.version ?? versions[0]?.version ?? "";
+};
+
 export default function CreateInstanceDialog({
   open,
   onOpenChange,
@@ -46,6 +64,10 @@ export default function CreateInstanceDialog({
   const [ramUnit, setRamUnit] = useState<"mb" | "gb">("mb");
   const [jvmArgs, setJvmArgs] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const loaderSelectionContextRef = useRef<{
+    loader: LoaderKind;
+    gameVersion: string;
+  } | null>(null);
 
   const busy = submitting || installing;
   const trimmedName = displayName.trim();
@@ -63,20 +85,10 @@ export default function CreateInstanceDialog({
   const displayMaxRam =
     ramUnit === "gb" ? Number((maxRamMb / 1024).toFixed(2)) : maxRamMb;
   const ramStep = ramUnit === "gb" ? 0.25 : 64;
-  const recommendedLoaderVersion = useMemo(() => {
-    if (loaderVersions.length === 0) return "";
-    if (loader === "fabric") {
-      const stable = loaderVersions.find(
-        (entry): entry is LoaderVersionSummary =>
-          "stable" in entry && entry.stable,
-      );
-      return stable?.version ?? loaderVersions[0]?.version ?? "";
-    }
-    const stable = loaderVersions.find(
-      (entry) => !/(alpha|beta|snapshot|rc)/i.test(entry.version),
-    );
-    return stable?.version ?? loaderVersions[0]?.version ?? "";
-  }, [loader, loaderVersions]);
+  const recommendedLoaderVersion = useMemo(
+    () => pickRecommendedLoaderVersion(loader, loaderVersions),
+    [loader, loaderVersions],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -153,10 +165,19 @@ export default function CreateInstanceDialog({
                   gameVersion,
                 });
         if (cancelled) return;
+        const recommended = pickRecommendedLoaderVersion(loader, versions);
+        const previousContext = loaderSelectionContextRef.current;
+        const contextChanged =
+          !previousContext ||
+          previousContext.loader !== loader ||
+          previousContext.gameVersion !== gameVersion;
         setLoaderVersions(versions);
-        if (!versions.some((entry) => entry.version === loaderVersion)) {
-          setLoaderVersion(versions[0]?.version ?? "");
-        }
+        setLoaderVersion((current) => {
+          if (contextChanged) return recommended;
+          if (versions.some((entry) => entry.version === current)) return current;
+          return recommended;
+        });
+        loaderSelectionContextRef.current = { loader, gameVersion };
       } catch (err: any) {
         if (cancelled) return;
         const message = err?.toString?.() || "Failed to load loader versions.";

@@ -1,6 +1,6 @@
 **/*.md
-!**/*/README.md
-!Changelogs.md
+!README.md
+!docs/**/*.md
 screenshots
 .ref
 .git

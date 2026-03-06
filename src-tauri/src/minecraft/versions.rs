@@ -100,7 +100,7 @@ pub fn list_forge_versions(game_version: &str) -> Result<Vec<ForgeVersionSummary
 }
 
 pub fn list_neoforge_versions(game_version: &str) -> Result<Vec<ForgeVersionSummary>, String> {
-  let channel = game_version.strip_prefix("1.").unwrap_or(game_version);
+  let channel = resolve_neoforge_channel(game_version);
   let metadata = fetch_text(NEOFORGE_MAVEN_METADATA_URL)?;
   let re = Regex::new(r"<version>([^<]+)</version>").map_err(|err| err.to_string())?;
 
@@ -109,7 +109,10 @@ pub fn list_neoforge_versions(game_version: &str) -> Result<Vec<ForgeVersionSumm
 
   for capture in re.captures_iter(&metadata) {
     let version = capture.get(1).map(|m| m.as_str().trim()).unwrap_or_default();
-    if version.is_empty() || !version.starts_with(channel) || !seen.insert(version.to_string()) {
+    if version.is_empty()
+      || !neoforge_version_matches_channel(version, &channel)
+      || !seen.insert(version.to_string())
+    {
       continue;
     }
     let installer_url = format!(
@@ -126,6 +129,26 @@ pub fn list_neoforge_versions(game_version: &str) -> Result<Vec<ForgeVersionSumm
 
   results.sort_by(|a, b| compare_versions_desc(&a.version, &b.version));
   Ok(results)
+}
+
+pub(crate) fn resolve_neoforge_channel(game_version: &str) -> String {
+  let trimmed = game_version.trim();
+  let normalized = trimmed.strip_prefix("1.").unwrap_or(trimmed);
+  let mut parts = normalized.split('.');
+  let major = parts.next().unwrap_or_default();
+  let minor = parts.next().unwrap_or_default();
+  if major.is_empty() || minor.is_empty() {
+    return normalized.to_string();
+  }
+  format!("{}.{}", major, minor)
+}
+
+pub(crate) fn neoforge_version_matches_game(version: &str, game_version: &str) -> bool {
+  neoforge_version_matches_channel(version, &resolve_neoforge_channel(game_version))
+}
+
+fn neoforge_version_matches_channel(version: &str, channel: &str) -> bool {
+  version == channel || version.starts_with(&format!("{}.", channel))
 }
 
 fn compare_versions_desc(a: &str, b: &str) -> Ordering {

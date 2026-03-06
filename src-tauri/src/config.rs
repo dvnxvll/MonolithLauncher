@@ -166,6 +166,7 @@ pub enum Loader {
   Vanilla,
   Fabric,
   Forge,
+  #[serde(rename = "neoforge", alias = "neo_forge")]
   NeoForge,
 }
 

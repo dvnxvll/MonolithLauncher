@@ -111,8 +111,27 @@ fn should_retry_http(err: &ureq::Error) -> bool {
 fn should_retry_download(err: &DownloadError) -> bool {
   match err {
     DownloadError::Http(err) => should_retry_http(err),
-    DownloadError::Io(_) => false,
+    DownloadError::Io(err) => should_retry_io(err),
   }
+}
+
+fn should_retry_io(err: &io::Error) -> bool {
+  if matches!(
+    err.kind(),
+    io::ErrorKind::ConnectionReset
+      | io::ErrorKind::ConnectionAborted
+      | io::ErrorKind::TimedOut
+      | io::ErrorKind::UnexpectedEof
+      | io::ErrorKind::Interrupted
+      | io::ErrorKind::BrokenPipe
+  ) {
+    return true;
+  }
+
+  matches!(
+    err.raw_os_error(),
+    Some(104 | 54 | 10053 | 10054 | 10060 | 110)
+  )
 }
 
 fn is_range_not_satisfiable(err: &DownloadError) -> bool {

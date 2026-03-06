@@ -81,7 +81,8 @@ pub fn ensure_instance_ready(
 
   create_instance_layout(&instance_dir)?;
 
-  if install_state_matches(&instance_dir, instance)? {
+  let install_state_ok = install_state_matches(&instance_dir, instance)?;
+  if install_state_ok && core_version_metadata_present(&instance_dir, instance) {
     return Ok(());
   }
 
@@ -236,6 +237,44 @@ fn install_state_matches(instance_dir: &Path, instance: &Instance) -> Result<boo
   }
 
   Ok(false)
+}
+
+fn core_version_metadata_present(instance_dir: &Path, instance: &Instance) -> bool {
+  let version_id = resolve_expected_version_id(instance);
+  instance_dir
+    .join("versions")
+    .join(&version_id)
+    .join(format!("{}.json", version_id))
+    .is_file()
+}
+
+fn resolve_expected_version_id(instance: &Instance) -> String {
+  match instance.loader {
+    Loader::Vanilla => instance.version.clone(),
+    Loader::Fabric => instance
+      .loader_version
+      .as_ref()
+      .map(|loader| format!("fabric-loader-{}-{}", loader, instance.version))
+      .unwrap_or_else(|| instance.version.clone()),
+    Loader::Forge => {
+      let loader = instance
+        .loader_version
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(|| instance.version.clone());
+      let full_version = if loader.contains(&instance.version) && loader.contains('-') {
+        loader
+      } else {
+        format!("{}-{}", instance.version, loader)
+      };
+      format!("forge-{}", full_version)
+    }
+    Loader::NeoForge => instance
+      .loader_version
+      .as_ref()
+      .map(|loader| format!("neoforge-{}", loader))
+      .unwrap_or_else(|| instance.version.clone()),
+  }
 }
 
 fn write_install_state(instance_dir: &Path, instance: &Instance) -> Result<(), String> {

@@ -2,9 +2,12 @@
 
 Cross-platform Minecraft Java launcher built with Tauri, Rust, Next.js, and Bun.
 
+[![Latest Release](https://img.shields.io/github/v/release/dvnxvll/MonolithLauncher?style=for-the-badge&label=Latest%20Release)](https://github.com/dvnxvll/MonolithLauncher/releases/latest)
+[![Nightly Build](https://img.shields.io/github/actions/workflow/status/dvnxvll/MonolithLauncher/nightly-release.yml?branch=main&style=for-the-badge&label=Nightly%20Build)](https://github.com/dvnxvll/MonolithLauncher/releases/tag/nightly)
+
 ![Monolith Launcher Main UI](images/image-1.png)
 
-## Features
+## Highlights
 - Multi-instance management with isolated directories and pinning
 - Loader support: Vanilla, Fabric, Forge, NeoForge
 - Microsoft authentication and ownership checks
@@ -13,27 +16,37 @@ Cross-platform Minecraft Java launcher built with Tauri, Rust, Next.js, and Bun.
 - Runtime metrics panel (RAM, CPU, GPU)
 - Discord Rich Presence integration
 
-## Stack
-- Backend: Rust + Tauri
-- Frontend: Next.js + TypeScript
-- Package manager/runtime: Bun
+## Downloads
+- Latest stable: https://github.com/dvnxvll/MonolithLauncher/releases/latest
+- Nightly prerelease: https://github.com/dvnxvll/MonolithLauncher/releases/tag/nightly
 
-## Requirements
+Common Linux artifacts:
+- `monolith-launcher-v<version>-linux-<arch>` (raw executable)
+- `monolith-launcher-v<version>-linux-<arch>.run` (self-extracting launcher)
+- `monolith-launcher-v<version>-linux-<arch>.AppImage` (portable bundle)
+- `monolith-launcher-v<version>-linux-<arch>.deb`
+- `monolith-launcher-v<version>-linux-<arch>.rpm`
+
+## Installation
+Installation guides are in [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
+
+## Build From Source
+Requirements:
 - Bun
-- Rust toolchain (1.77.2+)
+- Rust toolchain (`1.77.2+`)
 - Tauri CLI v2
 - Platform-specific Tauri system dependencies
 
-## Development
+Development:
 ```bash
 ./dev.sh
 ```
 
-Optional flags:
+Optional `dev.sh` flags:
 - `--tips` or `--tour`
 - `--update-test`
 
-## Production Build
+Production build:
 ```bash
 cd monolith-ui
 bun run build
@@ -43,14 +56,9 @@ cargo tauri build
 
 Artifacts are generated under `src-tauri/target/release/bundle/`.
 
-## Configuration
-- Main config file: platform app config directory, `config.json`
-- Default roots:
-  - `~/.monolith/instances`
-  - `~/.monolith/instances-labs`
-
-## Changelog
-See [Changelogs.md](Changelogs.md) for release notes.
+## Documentation
+- Getting started: [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)
+- Changelog: [docs/CHANGELOG.md](docs/CHANGELOG.md)
 
 ## License
 MIT. See `LICENSE`.

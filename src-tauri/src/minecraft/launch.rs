@@ -76,6 +76,13 @@ pub fn launch_instance(
     .clone()
     .unwrap_or_else(|| jar_id.clone());
   let natives_dir = instance_dir.join("natives").join(natives_id);
+  let logging_path = resolved
+    .logging
+    .as_ref()
+    .and_then(|logging| logging.client.as_ref())
+    .and_then(|client| client.file.as_ref())
+    .map(|file| assets_root.join("log_configs").join(&file.id))
+    .unwrap_or_default();
 
   if let Some(logging) = &resolved.logging {
     download_logging_config(logging, &assets_root)?;
@@ -98,9 +105,11 @@ pub fn launch_instance(
       .unwrap_or_else(|| version_id.clone()),
     game_dir: instance_dir.to_string_lossy().to_string(),
     assets_root: assets_root.to_string_lossy().to_string(),
+    library_dir: libraries_dir.to_string_lossy().to_string(),
     asset_index_name,
     classpath: classpath.clone(),
     natives_dir: natives_dir.to_string_lossy().to_string(),
+    logging_path: logging_path.to_string_lossy().to_string(),
     launcher_name: "monolith".to_string(),
     launcher_version: env!("CARGO_PKG_VERSION").to_string(),
     version_type,
@@ -116,7 +125,7 @@ pub fn launch_instance(
   jvm_args.retain(|arg| {
     !(arg == "-cp"
       || arg.contains("${classpath}")
-      || arg.contains("${classpath_separator}")
+      || (arg.contains("${classpath_separator}") && arg.contains("${classpath}"))
       || arg.contains("${natives_directory}"))
   });
 
@@ -129,6 +138,7 @@ pub fn launch_instance(
       jvm_args.push(arg);
     }
   }
+  merge_ignore_list_with_jar_name(&mut jvm_args, &jar_path);
 
   let min_ram_mb = instance
     .java_min_ram_mb
@@ -241,6 +251,22 @@ pub fn launch_instance(
   }
 
   Ok(pid)
+}
+
+fn merge_ignore_list_with_jar_name(jvm_args: &mut [String], jar_path: &Path) {
+  let Some(jar_name) = jar_path.file_name().and_then(|name| name.to_str()) else {
+    return;
+  };
+  for arg in jvm_args.iter_mut() {
+    if let Some(value) = arg.strip_prefix("-DignoreList=") {
+      let has_jar = value.split(',').any(|item| item.trim().eq_ignore_ascii_case(jar_name));
+      if !has_jar {
+        arg.push(',');
+        arg.push_str(jar_name);
+      }
+      break;
+    }
+  }
 }
 
 fn emit_launch_preamble(
@@ -811,6 +837,7 @@ fn replace_tokens(value: String, context: &LaunchContext) -> String {
     .replace("${version_name}", &context.version_name)
     .replace("${game_directory}", &context.game_dir)
     .replace("${assets_root}", &context.assets_root)
+    .replace("${library_directory}", &context.library_dir)
     .replace("${assets_index_name}", &context.asset_index_name)
     .replace("${auth_uuid}", &context.uuid)
     .replace("${auth_access_token}", &context.access_token)
@@ -822,6 +849,7 @@ fn replace_tokens(value: String, context: &LaunchContext) -> String {
     .replace("${classpath}", &context.classpath)
     .replace("${classpath_separator}", classpath_separator())
     .replace("${natives_directory}", &context.natives_dir)
+    .replace("${path}", &context.logging_path)
     .replace("${launcher_name}", &context.launcher_name)
     .replace("${launcher_version}", &context.launcher_version)
 }

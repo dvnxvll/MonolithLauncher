@@ -7,6 +7,7 @@ use crate::minecraft::util::{
   build_maven_path_url, current_arch_suffix, current_os_name, is_excluded, library_allowed,
   parse_maven_coordinate, resolve_library_artifact,
 };
+use crate::minecraft::versions::{neoforge_version_matches_game, resolve_neoforge_channel};
 use crate::minecraft::{
   DEFAULT_LIBRARIES_URL, FABRIC_LOADER_URL, MOJANG_MANIFEST_URL, NEOFORGE_MAVEN_BASE,
   RESOURCES_BASE_URL,
@@ -128,6 +129,14 @@ pub(crate) fn install_neoforge(
   instance_dir: &Path,
   emit: &dyn Fn(ProgressEvent),
 ) -> Result<(), String> {
+  if !neoforge_version_matches_game(loader_version, game_version) {
+    let channel = resolve_neoforge_channel(game_version);
+    return Err(format!(
+      "NeoForge version '{}' is incompatible with Minecraft '{}'. Expected NeoForge {}.x.",
+      loader_version, game_version, channel
+    ));
+  }
+
   let installer_url = format!(
     "{}/{}/neoforge-{}-installer.jar",
     NEOFORGE_MAVEN_BASE,
@@ -390,11 +399,16 @@ fn run_neoforge_installer(
     run_java_installer(installer_path, instance_dir, "neoforge")?;
   }
 
-  if neoforge_json_path.exists() {
-    if let Ok(profile) = load_json::<ForgeProfile>(&neoforge_json_path) {
-      let libraries_dir = instance_dir.join("libraries");
-      download_profile_libraries(&profile.libraries, &libraries_dir, emit)?;
-    }
+  if !neoforge_json_path.exists() {
+    return Err(format!(
+      "NeoForge metadata '{}' missing after installer run",
+      neoforge_json_path.display()
+    ));
+  }
+
+  if let Ok(profile) = load_json::<ForgeProfile>(&neoforge_json_path) {
+    let libraries_dir = instance_dir.join("libraries");
+    download_profile_libraries(&profile.libraries, &libraries_dir, emit)?;
   }
 
   Ok(())
@@ -405,10 +419,13 @@ fn run_java_installer(
   instance_dir: &Path,
   loader_label: &str,
 ) -> Result<(), String> {
+  ensure_launcher_profile(instance_dir)?;
+
   let output = Command::new("java")
     .arg("-jar")
     .arg(installer_path)
     .arg("--installClient")
+    .arg(instance_dir)
     .current_dir(instance_dir)
     .output()
     .map_err(|err| format!("failed to run {} installer: {}", loader_label, err))?;
@@ -426,6 +443,27 @@ fn run_java_installer(
     stdout.trim(),
     stderr.trim()
   ))
+}
+
+fn ensure_launcher_profile(instance_dir: &Path) -> Result<(), String> {
+  let profile_path = instance_dir.join("launcher_profiles.json");
+  if profile_path.exists() {
+    return Ok(());
+  }
+
+  let payload = r#"{
+  "profiles": {},
+  "settings": {},
+  "version": 3
+}
+"#;
+  fs::write(&profile_path, payload).map_err(|err| {
+    format!(
+      "failed to initialize launcher profile '{}': {}",
+      profile_path.display(),
+      err
+    )
+  })
 }
 
 fn download_profile_libraries(

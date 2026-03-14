@@ -95,6 +95,22 @@ jobs:
         with:
           path: release-artifacts
 
+      - name: Collect release files
+        id: collect_files
+        shell: bash
+        run: |
+          mapfile -t FILES < <(find release-artifacts -type f | sort)
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "No release files found."
+            exit 1
+          fi
+
+          {
+            echo "files<<EOF"
+            printf '%s\n' "${FILES[@]}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
       - name: Publish nightly prerelease
         uses: ncipollo/release-action@v1
         with:
@@ -110,5 +126,5 @@ jobs:
           replacesArtifacts: true
           removeArtifacts: true
           makeLatest: false
-          artifacts: "release-artifacts/**/*"
+          artifacts: ${{ steps.collect_files.outputs.files }}
           artifactErrorsFailBuild: true

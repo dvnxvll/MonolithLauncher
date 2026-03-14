@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { FolderOpen, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { BranchConnectorCard } from "@/components/branch-connector-card";
 import {
   Select,
   SelectContent,
@@ -14,7 +16,11 @@ import AddDirectoryDialog from "./dialogs/add-directory-dialog";
 import AddJavaDialog from "./dialogs/add-java-dialog";
 import { useLauncher } from "./launcher-provider";
 import { slugify } from "@/lib/launcher-utils";
-import type { InstanceRoot, JavaRuntimeEntry } from "@/lib/launcher-types";
+import type {
+  DiscordPresenceMode,
+  InstanceRoot,
+  JavaRuntimeEntry,
+} from "@/lib/launcher-types";
 
 export default function Settings() {
   const { config, saveConfig, setStatus } = useLauncher();
@@ -34,6 +40,14 @@ export default function Settings() {
   const [selectedRuntimeId, setSelectedRuntimeId] = useState("auto");
   const [syncEnabled, setSyncEnabled] = useState(true);
   const [applyToNew, setApplyToNew] = useState(true);
+  const [discordPresence, setDiscordPresence] = useState(true);
+  const [discordPresenceMode, setDiscordPresenceMode] =
+    useState<DiscordPresenceMode>("dynamic_minecraft");
+  const [networkDiagnostics, setNetworkDiagnostics] = useState(true);
+  const [smartNetworkOptimization, setSmartNetworkOptimization] = useState(true);
+  const [performanceGamemode, setPerformanceGamemode] = useState(false);
+  const [performanceMangohud, setPerformanceMangohud] = useState(false);
+  const [performanceZink, setPerformanceZink] = useState(false);
   const [syncOptions, setSyncOptions] = useState({
     resourcepacks: true,
     texturepacks: true,
@@ -55,6 +69,15 @@ export default function Settings() {
     setSelectedSecondary(secondary);
     setSyncEnabled(config.settings.pack_sync.enabled);
     setApplyToNew(config.settings.apply_to_new_instances);
+    setDiscordPresence(config.settings.discord_presence ?? true);
+    setDiscordPresenceMode(
+      config.settings.discord_presence_mode ?? "dynamic_minecraft",
+    );
+    setNetworkDiagnostics(config.settings.network_diagnostics ?? true);
+    setSmartNetworkOptimization(config.settings.smart_network_optimization ?? true);
+    setPerformanceGamemode(config.settings.performance_gamemode ?? false);
+    setPerformanceMangohud(config.settings.performance_mangohud ?? false);
+    setPerformanceZink(config.settings.performance_zink ?? false);
     setSyncOptions({
       resourcepacks: config.settings.pack_sync.resourcepacks,
       texturepacks: config.settings.pack_sync.texturepacks,
@@ -358,6 +381,99 @@ export default function Settings() {
     setStatus("JVM settings saved.");
   };
 
+  const handleDiscordPresenceToggle = async (next: boolean) => {
+    if (!config) return;
+    setDiscordPresence(next);
+    const nextConfig = {
+      ...config,
+      settings: {
+        ...config.settings,
+        discord_presence: next,
+      },
+    };
+    await saveConfig(nextConfig);
+  };
+
+  const handleDiscordPresenceModeToggle = async (enabled: boolean) => {
+    if (!config) return;
+    const next: DiscordPresenceMode =
+      enabled ? "dynamic_monolith" : "dynamic_minecraft";
+    setDiscordPresenceMode(next);
+    const nextConfig = {
+      ...config,
+      settings: {
+        ...config.settings,
+        discord_presence_mode: next,
+      },
+    };
+    await saveConfig(nextConfig);
+  };
+
+  const handleNetworkDiagnosticsToggle = async (next: boolean) => {
+    if (!config) return;
+    setNetworkDiagnostics(next);
+    const nextConfig = {
+      ...config,
+      settings: {
+        ...config.settings,
+        network_diagnostics: next,
+      },
+    };
+    await saveConfig(nextConfig);
+  };
+
+  const handleSmartNetworkOptimizationToggle = async (next: boolean) => {
+    if (!config) return;
+    setSmartNetworkOptimization(next);
+    const nextConfig = {
+      ...config,
+      settings: {
+        ...config.settings,
+        smart_network_optimization: next,
+      },
+    };
+    await saveConfig(nextConfig);
+  };
+
+  const handlePerformanceGamemodeToggle = async (next: boolean) => {
+    if (!config) return;
+    setPerformanceGamemode(next);
+    const nextConfig = {
+      ...config,
+      settings: {
+        ...config.settings,
+        performance_gamemode: next,
+      },
+    };
+    await saveConfig(nextConfig);
+  };
+
+  const handlePerformanceMangohudToggle = async (next: boolean) => {
+    if (!config) return;
+    setPerformanceMangohud(next);
+    const nextConfig = {
+      ...config,
+      settings: {
+        ...config.settings,
+        performance_mangohud: next,
+      },
+    };
+    await saveConfig(nextConfig);
+  };
+
+  const handlePerformanceZinkToggle = async (next: boolean) => {
+    if (!config) return;
+    setPerformanceZink(next);
+    const nextConfig = {
+      ...config,
+      settings: {
+        ...config.settings,
+        performance_zink: next,
+      },
+    };
+    await saveConfig(nextConfig);
+  };
+
   const ramDisplayUnit = ramUnit === "gb" ? "GB" : "MB";
   const displayMinRam =
     ramUnit === "gb" ? Number((minRamMb / 1024).toFixed(2)) : minRamMb;
@@ -367,25 +483,11 @@ export default function Settings() {
 
   const instances = config?.instances ?? [];
 
-  const toggleSwitch = (isEnabled: boolean) => (
-    <button
-      className={`relative w-12 h-6 rounded-full transition-all ${
-        isEnabled ? "bg-emerald-500" : "bg-red-500"
-      }`}
-    >
-      <div
-        className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-foreground transition-transform ${
-          isEnabled ? "translate-x-6" : "translate-x-0"
-        }`}
-      />
-    </button>
-  );
-
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <div className="sticky top-0 z-20 h-28 flex items-center border-b border-border px-8 bg-background">
-        <div className="w-full">
-          <h2 className="text-4xl font-bold">Settings</h2>
+      <div className="sticky top-0 z-20 border-b border-border bg-background px-4 py-4 md:px-6 xl:px-8">
+        <div className="flex min-h-[79px] w-full flex-col justify-center">
+          <h2 className="text-3xl font-bold md:text-4xl">Settings</h2>
           <p className="text-foreground/60 text-sm mt-1">
             Configure launcher and game preferences
           </p>
@@ -393,12 +495,15 @@ export default function Settings() {
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto">
-        <div className="w-full max-w-4xl p-8 mx-auto space-y-6">
-          <div className="bg-card border border-border rounded-xl p-6">
-            <div className="flex items-start justify-between mb-6">
+        <div className="mx-auto w-full max-w-[1520px] space-y-6 p-4 md:p-6 xl:p-8">
+          <div className="bg-card border border-border rounded-xl p-4 md:p-6">
+            <div className="mb-6 flex items-start justify-between gap-4">
               <div>
-                <h3 className="text-xl font-bold">Instance Directories</h3>
-                <p className="text-sm text-foreground/60 mt-1">
+                <p className="text-[10px] uppercase tracking-[0.28em] text-foreground/45">
+                  Storage
+                </p>
+                <h3 className="mt-2 text-xl font-bold">Instance Directories</h3>
+                <p className="mt-1 text-sm text-foreground/60">
                   Manage game instance storage locations
                 </p>
               </div>
@@ -410,8 +515,8 @@ export default function Settings() {
               </Button>
             </div>
 
-            <div className="bg-secondary/20 rounded-lg p-4 mb-6 space-y-2">
-              <p className="text-xs font-bold uppercase tracking-widest text-foreground/70">
+            <div className="mb-6 rounded-xl border border-border bg-secondary/15 p-4 space-y-2">
+              <p className="text-[10px] uppercase tracking-[0.24em] text-foreground/45">
                 Directory Types
               </p>
               <p className="text-sm text-foreground/70">
@@ -428,9 +533,9 @@ export default function Settings() {
               </p>
             </div>
 
-            <div className="grid grid-cols-2 gap-4 mb-6">
+            <div className="grid gap-4 mb-6 md:grid-cols-2">
               <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-foreground/70 mb-2">
+                <label className="mb-2 block text-[10px] uppercase tracking-[0.24em] text-foreground/45">
                   Primary Directory
                 </label>
                 <Select
@@ -454,7 +559,7 @@ export default function Settings() {
                 </Select>
               </div>
               <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-foreground/70 mb-2">
+                <label className="mb-2 block text-[10px] uppercase tracking-[0.24em] text-foreground/45">
                   Secondary Directory
                 </label>
                 <Select
@@ -495,7 +600,7 @@ export default function Settings() {
                 {roots.map((dir) => (
                   <div
                     key={dir.id}
-                    className="flex items-center justify-between p-4 bg-secondary/20 rounded-lg border border-border"
+                    className="flex items-center justify-between rounded-xl border border-border bg-secondary/15 p-4"
                   >
                     <div className="flex items-center gap-3 flex-1 min-w-0">
                       <FolderOpen
@@ -534,11 +639,14 @@ export default function Settings() {
             )}
           </div>
 
-          <div className="bg-card border border-border rounded-xl p-6">
-            <div className="flex items-start justify-between mb-6">
+          <div className="bg-card border border-border rounded-xl p-4 md:p-6">
+            <div className="mb-6 flex items-start justify-between gap-4">
               <div>
-                <h3 className="text-xl font-bold">Java Selection</h3>
-                <p className="text-sm text-foreground/60 mt-1">
+                <p className="text-[10px] uppercase tracking-[0.28em] text-foreground/45">
+                  Runtime
+                </p>
+                <h3 className="mt-2 text-xl font-bold">Java Selection</h3>
+                <p className="mt-1 text-sm text-foreground/60">
                   Choose the default Java runtime for launching Minecraft
                 </p>
               </div>
@@ -552,7 +660,7 @@ export default function Settings() {
 
             <div className="space-y-4">
               <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-foreground/70 mb-2">
+                <label className="mb-2 block text-[10px] uppercase tracking-[0.24em] text-foreground/45">
                   Default Runtime
                 </label>
                 <Select
@@ -595,7 +703,7 @@ export default function Settings() {
                   {javaRuntimes.map((runtime) => (
                     <div
                       key={runtime.id}
-                      className="flex items-center justify-between p-4 bg-secondary/20 rounded-lg border border-border"
+                      className="flex items-center justify-between rounded-xl border border-border bg-secondary/15 p-4"
                     >
                       <div className="flex items-center gap-3 flex-1 min-w-0">
                         <FolderOpen
@@ -634,27 +742,176 @@ export default function Settings() {
             </div>
           </div>
 
+          <div className="bg-card border border-border rounded-xl p-4 md:p-6">
+            <div className="flex items-start justify-between gap-6">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.28em] text-foreground/45">
+                  Integration
+                </p>
+                <h3 className="mt-2 text-xl font-bold">Presence & Network</h3>
+                <p className="mt-1 text-sm text-foreground/60">
+                  Configure Discord presence behavior and network diagnostics tools.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-6 rounded-xl border border-border bg-secondary/15 p-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-medium">Discord Rich Presence</p>
+                  <p className="mt-1 text-sm text-foreground/60">
+                    Show launcher activity and running instance presence in Discord.
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="rounded-full border border-border bg-background px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-foreground/70">
+                    {discordPresence ? "Enabled" : "Disabled"}
+                  </span>
+                  <Switch
+                    checked={discordPresence}
+                    onCheckedChange={handleDiscordPresenceToggle}
+                    className="flex-shrink-0"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className={`ml-3 mt-4 pl-4 ${discordPresence ? "" : "opacity-55"}`}>
+              <BranchConnectorCard position="last" className="bg-secondary/15">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium">Use Dynamic Monolith RPC</p>
+                    <p className="mt-1 text-sm text-foreground/60">
+                      Enabled: Monolith RPC stays active and reports runtime state. Disabled:
+                      handoff to Minecraft RPC while playing.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={discordPresenceMode === "dynamic_monolith"}
+                    onCheckedChange={handleDiscordPresenceModeToggle}
+                    className="flex-shrink-0"
+                    disabled={!discordPresence}
+                  />
+                </div>
+              </BranchConnectorCard>
+            </div>
+
+            <div className="mt-6 rounded-xl border border-border bg-secondary/15 p-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-medium">Network Diagnostics</p>
+                  <p className="mt-1 text-sm text-foreground/60">
+                    Enables server latency analysis and smart ping diagnostics in the Servers tab.
+                  </p>
+                </div>
+                <Switch
+                  checked={networkDiagnostics}
+                  onCheckedChange={handleNetworkDiagnosticsToggle}
+                  className="flex-shrink-0"
+                />
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-border bg-secondary/15 p-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-medium">Smart Network Optimization</p>
+                  <p className="mt-1 text-sm text-foreground/60">
+                    Adds stable Java network defaults for launch sessions to reduce join issues on mixed IPv4/IPv6 networks.
+                  </p>
+                </div>
+                <Switch
+                  checked={smartNetworkOptimization}
+                  onCheckedChange={handleSmartNetworkOptimizationToggle}
+                  className="flex-shrink-0"
+                />
+              </div>
+            </div>
+
+            <div className="mt-6 rounded-xl border border-border bg-secondary/15 p-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-medium">Linux Performance Hooks</p>
+                  <p className="mt-1 text-sm text-foreground/60">
+                    Optional launch wrappers and renderer overrides for Linux users.
+                  </p>
+                </div>
+              </div>
+
+              <div className="ml-3 mt-4 space-y-3 pl-4">
+                <BranchConnectorCard position="first" className="bg-secondary/10">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-medium">Use GameMode (`gamemoderun`)</p>
+                      <p className="mt-1 text-sm text-foreground/60">
+                        Requests CPU governor and scheduler tuning during game runtime.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={performanceGamemode}
+                      onCheckedChange={handlePerformanceGamemodeToggle}
+                      className="flex-shrink-0"
+                    />
+                  </div>
+                </BranchConnectorCard>
+
+                <BranchConnectorCard position="middle" className="bg-secondary/10">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-medium">Use MangoHud Overlay</p>
+                      <p className="mt-1 text-sm text-foreground/60">
+                        Adds performance overlay for FPS, frame-time, and hardware telemetry.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={performanceMangohud}
+                      onCheckedChange={handlePerformanceMangohudToggle}
+                      className="flex-shrink-0"
+                    />
+                  </div>
+                </BranchConnectorCard>
+
+                <BranchConnectorCard position="last" className="bg-secondary/10">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-medium">Force Zink OpenGL Layer</p>
+                      <p className="mt-1 text-sm text-foreground/60">
+                        Forces Mesa Zink (OpenGL-on-Vulkan). Keep disabled unless your driver stack benefits from it.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={performanceZink}
+                      onCheckedChange={handlePerformanceZinkToggle}
+                      className="flex-shrink-0"
+                    />
+                  </div>
+                </BranchConnectorCard>
+              </div>
+            </div>
+          </div>
+
           <div
             data-tip-id="settings-sync-pack"
-            className="bg-card border border-border rounded-xl p-6"
+            className="bg-card border border-border rounded-xl p-4 md:p-6"
           >
-            <div className="flex items-start justify-between mb-8">
+            <div className="mb-8 flex items-start justify-between gap-6">
               <div>
-                <h3 className="text-xl font-bold">Sync Pack</h3>
-                <p className="text-sm text-foreground/60 mt-1">
+                <p className="text-[10px] uppercase tracking-[0.28em] text-foreground/45">
+                  Shared Content
+                </p>
+                <h3 className="mt-2 text-xl font-bold">Sync Pack</h3>
+                <p className="mt-1 text-sm text-foreground/60">
                   Synchronize game packs across instances
                 </p>
               </div>
-              <button
-                onClick={async () => {
-                  const next = !syncEnabled;
-                  setSyncEnabled(next);
-                  await updatePackSync({ enabled: next });
+              <Switch
+                checked={syncEnabled}
+                onCheckedChange={async (checked) => {
+                  setSyncEnabled(checked);
+                  await updatePackSync({ enabled: checked });
                 }}
                 className="flex-shrink-0"
-              >
-                {toggleSwitch(syncEnabled)}
-              </button>
+              />
             </div>
 
             <div
@@ -674,7 +931,7 @@ export default function Settings() {
               </div>
               {syncEnabled ? (
                 <>
-                  <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+                  <div className="grid gap-x-8 gap-y-4 md:grid-cols-2">
                     {[
                       { key: "resourcepacks", label: "Sync Resourcepacks" },
                       { key: "texturepacks", label: "Sync Texturepacks" },
@@ -684,59 +941,53 @@ export default function Settings() {
                     ].map((option) => (
                       <div
                         key={option.key}
-                        className="flex items-center justify-between p-3 bg-secondary/20 rounded-lg border border-border"
+                        className="flex items-center justify-between rounded-xl border border-border bg-secondary/15 p-4"
                       >
                         <label className="text-sm font-medium">
                           {option.label}
                         </label>
-                        <button
-                          onClick={async () => {
-                            const next =
-                              !syncOptions[
-                                option.key as keyof typeof syncOptions
-                              ];
+                        <Switch
+                          checked={
+                            syncOptions[
+                              option.key as keyof typeof syncOptions
+                            ]
+                          }
+                          onCheckedChange={async (checked) => {
                             setSyncOptions((prev) => ({
                               ...prev,
-                              [option.key]: next,
+                              [option.key]: checked,
                             }));
-                            await updatePackSync({ [option.key]: next } as any);
+                            await updatePackSync({ [option.key]: checked } as any);
                           }}
-                        >
-                          {toggleSwitch(
-                            syncOptions[option.key as keyof typeof syncOptions],
-                          )}
-                        </button>
+                        />
                       </div>
                     ))}
                   </div>
 
                   <div className="border-t border-border pt-6 space-y-4">
-                    <div className="flex items-center justify-between p-3 bg-secondary/20 rounded-lg border border-border">
+                    <div className="flex items-center justify-between rounded-xl border border-border bg-secondary/15 p-4">
                       <label className="text-sm font-medium">
                         Apply to new instances
                       </label>
-                      <button
-                        onClick={async () => {
-                          const next = !applyToNew;
-                          setApplyToNew(next);
+                      <Switch
+                        checked={applyToNew}
+                        onCheckedChange={async (checked) => {
+                          setApplyToNew(checked);
                           if (!config) return;
                           const nextConfig = {
                             ...config,
                             settings: {
                               ...config.settings,
-                              apply_to_new_instances: next,
+                              apply_to_new_instances: checked,
                             },
                           };
                           await saveConfig(nextConfig);
-                          setStatus("Apply-to-new setting updated.");
                         }}
-                      >
-                        {toggleSwitch(applyToNew)}
-                      </button>
+                      />
                     </div>
 
                     <div>
-                      <label className="block text-sm font-bold uppercase tracking-widest text-foreground/70 mb-3">
+                      <label className="mb-3 block text-[10px] uppercase tracking-[0.24em] text-foreground/45">
                         Reference Instance
                       </label>
                       <Select
@@ -774,16 +1025,19 @@ export default function Settings() {
 
           <div
             data-tip-id="settings-jvm-settings"
-            className="bg-card border border-border rounded-xl p-6"
+            className="bg-card border border-border rounded-xl p-4 md:p-6"
           >
-            <h3 className="text-xl font-bold mb-1">JVM Settings</h3>
+            <p className="text-[10px] uppercase tracking-[0.28em] text-foreground/45">
+              Advanced Runtime
+            </p>
+            <h3 className="mt-2 text-xl font-bold mb-1">JVM Settings</h3>
             <p className="text-sm text-foreground/60 mb-8">
               Configure Java Virtual Machine options
             </p>
 
             <div className="space-y-6">
               <div>
-                <label className="block text-sm font-bold uppercase tracking-widest text-foreground/70 mb-3">
+                <label className="mb-3 block text-[10px] uppercase tracking-[0.24em] text-foreground/45">
                   JVM Arguments
                 </label>
                 <textarea
@@ -797,7 +1051,7 @@ export default function Settings() {
 
               <div>
                 <div className="flex items-center justify-between mb-3">
-                  <label className="block text-sm font-bold uppercase tracking-widest text-foreground/70">
+                  <label className="block text-[10px] uppercase tracking-[0.24em] text-foreground/45">
                     Memory Configuration
                   </label>
                   <div className="flex items-center rounded-lg border border-border bg-secondary/30 p-1 text-xs font-semibold">
@@ -825,9 +1079,9 @@ export default function Settings() {
                     </button>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs text-foreground/60 mb-2">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="rounded-xl border border-border bg-secondary/15 p-4">
+                    <label className="mb-2 block text-[10px] uppercase tracking-[0.24em] text-foreground/45">
                       Minimum RAM
                     </label>
                     <div className="relative">
@@ -853,8 +1107,8 @@ export default function Settings() {
                       </span>
                     </div>
                   </div>
-                  <div>
-                    <label className="block text-xs text-foreground/60 mb-2">
+                  <div className="rounded-xl border border-border bg-secondary/15 p-4">
+                    <label className="mb-2 block text-[10px] uppercase tracking-[0.24em] text-foreground/45">
                       Maximum RAM
                     </label>
                     <div className="relative">

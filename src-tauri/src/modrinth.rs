@@ -70,6 +70,10 @@ struct ModrinthDependency {
 #[derive(Deserialize)]
 struct ModrinthProjectInfo {
   project_type: String,
+  #[serde(default)]
+  title: Option<String>,
+  #[serde(default)]
+  slug: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -77,6 +81,18 @@ pub(crate) struct ModrinthInstallResult {
   filename: String,
   version: String,
   project_id: String,
+}
+
+#[derive(Clone, Serialize)]
+pub(crate) struct ModrinthDependencyPlanItem {
+  project_id: String,
+  title: String,
+  project_type: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct ModrinthDependencyPlan {
+  dependencies: Vec<ModrinthDependencyPlanItem>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -267,8 +283,10 @@ fn build_search_url(
   if !game_version.is_empty() {
     facets.push(vec![format!("versions:{}", game_version)]);
   }
-  if let Some(loader) = loader {
-    facets.push(vec![format!("categories:{}", loader)]);
+  if project_type == "mod" {
+    if let Some(loader) = loader {
+      facets.push(vec![format!("categories:{}", loader)]);
+    }
   }
   if let Some(extra) = extra_facets {
     for group in extra {
@@ -314,6 +332,17 @@ fn resolve_target_dir(
     }
     _ => Err("unsupported Modrinth project type".to_string()),
   }
+}
+
+fn install_record_exists(
+  instance_dir: &Path,
+  project_type: &str,
+  world_id: Option<&str>,
+  record: &ModrinthInstallRecord,
+) -> bool {
+  resolve_target_dir(instance_dir, project_type, world_id)
+    .map(|dir| dir.join(&record.filename).exists())
+    .unwrap_or(false)
 }
 
 fn get_install_record(
@@ -366,10 +395,49 @@ fn record_install(
   }
 }
 
+fn remove_install_record(
+  installs: &mut ModrinthInstallIndex,
+  project_type: &str,
+  project_id: &str,
+  world_id: Option<&str>,
+  target_dir: &Path,
+) {
+  let record = match project_type {
+    "mod" => installs.mods.remove(project_id),
+    "resourcepack" => installs.resources.remove(project_id),
+    "shader" => installs.shaders.remove(project_id),
+    "datapack" => {
+      if let Some(world) = world_id {
+        let removed = installs
+          .datapacks
+          .get_mut(world)
+          .and_then(|map| map.remove(project_id));
+        let should_prune = installs
+          .datapacks
+          .get(world)
+          .map(|map| map.is_empty())
+          .unwrap_or(false);
+        if should_prune {
+          installs.datapacks.remove(world);
+        }
+        removed
+      } else {
+        None
+      }
+    }
+    _ => None,
+  };
+  remove_previous_file(target_dir, record);
+}
+
 fn fetch_project_type(project_id: &str) -> Result<String, String> {
-  let url = format!("{}/project/{}", MODRINTH_BASE_URL, project_id);
-  let info: ModrinthProjectInfo = fetch_modrinth_json(&url)?;
+  let info = fetch_project_info(project_id)?;
   Ok(info.project_type)
+}
+
+fn fetch_project_info(project_id: &str) -> Result<ModrinthProjectInfo, String> {
+  let url = format!("{}/project/{}", MODRINTH_BASE_URL, project_id);
+  fetch_modrinth_json(&url)
 }
 
 fn fetch_version_by_id(version_id: &str) -> Result<ModrinthVersion, String> {
@@ -463,6 +531,7 @@ pub(crate) async fn install_modrinth_project(
   game_version: String,
   loader: Option<String>,
   world_id: Option<String>,
+  install_dependencies: Option<bool>,
   state: State<'_, Mutex<ConfigStore>>,
 ) -> Result<ModrinthInstallResult, String> {
   let instance_dir = resolve_instance_dir(&instance_id, &state)?;
@@ -477,6 +546,7 @@ pub(crate) async fn install_modrinth_project(
       loader.as_deref(),
       world_id.as_deref(),
       None,
+      install_dependencies.unwrap_or(true),
       &mut installs,
       &mut visited,
     )?;
@@ -487,6 +557,47 @@ pub(crate) async fn install_modrinth_project(
   .map_err(|_| "Modrinth install task failed".to_string())?
 }
 
+#[tauri::command]
+pub(crate) async fn update_modrinth_project(
+  instance_id: String,
+  project_id: String,
+  project_type: String,
+  game_version: String,
+  loader: Option<String>,
+  world_id: Option<String>,
+  state: State<'_, Mutex<ConfigStore>>,
+) -> Result<ModrinthInstallResult, String> {
+  let instance_dir = resolve_instance_dir(&instance_id, &state)?;
+  tauri::async_runtime::spawn_blocking(move || {
+    let mut installs = load_modrinth_index(&instance_dir)?;
+    let target_dir = resolve_target_dir(&instance_dir, &project_type, world_id.as_deref())?;
+    remove_install_record(
+      &mut installs,
+      &project_type,
+      &project_id,
+      world_id.as_deref(),
+      &target_dir,
+    );
+    let mut visited = HashSet::new();
+    let result = install_modrinth_internal(
+      &instance_dir,
+      &project_id,
+      &project_type,
+      &game_version,
+      loader.as_deref(),
+      world_id.as_deref(),
+      None,
+      true,
+      &mut installs,
+      &mut visited,
+    )?;
+    save_modrinth_index(&instance_dir, &installs)?;
+    Ok(result)
+  })
+  .await
+  .map_err(|_| "Modrinth update task failed".to_string())?
+}
+
 fn install_modrinth_internal(
   instance_dir: &Path,
   project_id: &str,
@@ -495,6 +606,7 @@ fn install_modrinth_internal(
   loader: Option<&str>,
   world_id: Option<&str>,
   version_id: Option<&str>,
+  install_dependencies: bool,
   installs: &mut ModrinthInstallIndex,
   visited: &mut HashSet<String>,
 ) -> Result<ModrinthInstallResult, String> {
@@ -542,40 +654,43 @@ fn install_modrinth_internal(
     select_version(&versions).ok_or_else(|| "no matching Modrinth versions".to_string())?.clone()
   };
 
-  for dependency in &version.dependencies {
-    if dependency.dependency_type != "required" {
-      continue;
+  if install_dependencies {
+    for dependency in &version.dependencies {
+      if dependency.dependency_type != "required" {
+        continue;
+      }
+      let dep_project_id = match dependency.project_id.as_ref() {
+        Some(project_id) => project_id,
+        None => continue,
+      };
+      let dep_project_type = fetch_project_type(dep_project_id)?;
+      if !matches!(
+        dep_project_type.as_str(),
+        "mod" | "resourcepack" | "shader" | "datapack"
+      ) {
+        continue;
+      }
+      if dep_project_type == "datapack" && world_id.is_none() {
+        continue;
+      }
+      let dep_world_id = if dep_project_type == "datapack" {
+        world_id
+      } else {
+        None
+      };
+      let _ = install_modrinth_internal(
+        instance_dir,
+        dep_project_id,
+        &dep_project_type,
+        game_version,
+        loader,
+        dep_world_id,
+        dependency.version_id.as_deref(),
+        true,
+        installs,
+        visited,
+      )?;
     }
-    let dep_project_id = match dependency.project_id.as_ref() {
-      Some(project_id) => project_id,
-      None => continue,
-    };
-    let dep_project_type = fetch_project_type(dep_project_id)?;
-    if !matches!(
-      dep_project_type.as_str(),
-      "mod" | "resourcepack" | "shader" | "datapack"
-    ) {
-      continue;
-    }
-    if dep_project_type == "datapack" && world_id.is_none() {
-      continue;
-    }
-    let dep_world_id = if dep_project_type == "datapack" {
-      world_id
-    } else {
-      None
-    };
-    let _ = install_modrinth_internal(
-      instance_dir,
-      dep_project_id,
-      &dep_project_type,
-      game_version,
-      loader,
-      dep_world_id,
-      dependency.version_id.as_deref(),
-      installs,
-      visited,
-    )?;
   }
 
   let file = select_file(&version)
@@ -603,7 +718,129 @@ fn install_modrinth_internal(
   })
 }
 
+fn collect_required_dependencies(
+  instance_dir: &Path,
+  project_id: &str,
+  project_type: &str,
+  game_version: &str,
+  loader: Option<&str>,
+  world_id: Option<&str>,
+  version_id: Option<&str>,
+  installs: &ModrinthInstallIndex,
+  visited: &mut HashSet<String>,
+  dependencies: &mut Vec<ModrinthDependencyPlanItem>,
+) -> Result<(), String> {
+  let key = format!("{}:{}", project_type, project_id);
+  if !visited.insert(key) {
+    return Ok(());
+  }
+
+  let version = if let Some(version_id) = version_id {
+    fetch_version_by_id(version_id)?
+  } else {
+    let mut url = format!("{}/project/{}/version", MODRINTH_BASE_URL, project_id);
+    let versions_param = encode_json_param(&vec![game_version])?;
+    url.push_str(&format!("?game_versions={}", versions_param));
+    if let Some(loader_value) = resolve_loader_filter(project_type, loader) {
+      let loaders_param = encode_json_param(&vec![loader_value])?;
+      url.push_str(&format!("&loaders={}", loaders_param));
+    }
+    let versions: Vec<ModrinthVersion> = fetch_modrinth_json(&url)?;
+    select_version(&versions).ok_or_else(|| "no matching Modrinth versions".to_string())?.clone()
+  };
+
+  for dependency in &version.dependencies {
+    if dependency.dependency_type != "required" {
+      continue;
+    }
+    let dep_project_id = match dependency.project_id.as_deref() {
+      Some(project_id) => project_id,
+      None => continue,
+    };
+    let info = fetch_project_info(dep_project_id)?;
+    if !matches!(
+      info.project_type.as_str(),
+      "mod" | "resourcepack" | "shader" | "datapack"
+    ) {
+      continue;
+    }
+    if info.project_type == "datapack" && world_id.is_none() {
+      continue;
+    }
+    let dep_world_id = if info.project_type == "datapack" {
+      world_id
+    } else {
+      None
+    };
+    let already_installed = get_install_record(installs, &info.project_type, dep_project_id, dep_world_id)
+      .as_ref()
+      .map(|record| install_record_exists(instance_dir, &info.project_type, dep_world_id, record))
+      .unwrap_or(false);
+    if !already_installed {
+      dependencies.push(ModrinthDependencyPlanItem {
+        project_id: dep_project_id.to_string(),
+        title: info
+          .title
+          .clone()
+          .or(info.slug.clone())
+          .unwrap_or_else(|| dep_project_id.to_string()),
+        project_type: info.project_type.clone(),
+      });
+    }
+    collect_required_dependencies(
+      instance_dir,
+      dep_project_id,
+      &info.project_type,
+      game_version,
+      loader,
+      dep_world_id,
+      dependency.version_id.as_deref(),
+      installs,
+      visited,
+      dependencies,
+    )?;
+  }
+
+  Ok(())
+}
+
+#[tauri::command]
+pub(crate) async fn get_modrinth_install_plan(
+  instance_id: String,
+  project_id: String,
+  project_type: String,
+  game_version: String,
+  loader: Option<String>,
+  world_id: Option<String>,
+  state: State<'_, Mutex<ConfigStore>>,
+) -> Result<ModrinthDependencyPlan, String> {
+  let instance_dir = resolve_instance_dir(&instance_id, &state)?;
+  tauri::async_runtime::spawn_blocking(move || {
+    let installs = load_modrinth_index(&instance_dir)?;
+    let mut visited = HashSet::new();
+    let mut dependencies = Vec::new();
+    collect_required_dependencies(
+      &instance_dir,
+      &project_id,
+      &project_type,
+      &game_version,
+      loader.as_deref(),
+      world_id.as_deref(),
+      None,
+      &installs,
+      &mut visited,
+      &mut dependencies,
+    )?;
+    dependencies.sort_by(|a, b| a.title.cmp(&b.title));
+    dependencies.dedup_by(|a, b| a.project_id == b.project_id);
+    Ok(ModrinthDependencyPlan { dependencies })
+  })
+  .await
+  .map_err(|_| "Modrinth install plan task failed".to_string())?
+}
+
 fn collect_modrinth_records(
+  instance_dir: &Path,
   installs: &ModrinthInstallIndex,
   project_type: &str,
   world_id: Option<&str>,
@@ -612,16 +849,19 @@ fn collect_modrinth_records(
     "mod" => installs
       .mods
       .iter()
+      .filter(|(_, record)| install_record_exists(instance_dir, project_type, None, record))
       .map(|(id, record)| (id.clone(), record.version.clone()))
       .collect::<Vec<_>>(),
     "resourcepack" => installs
       .resources
       .iter()
+      .filter(|(_, record)| install_record_exists(instance_dir, project_type, None, record))
       .map(|(id, record)| (id.clone(), record.version.clone()))
       .collect::<Vec<_>>(),
     "shader" => installs
       .shaders
       .iter()
+      .filter(|(_, record)| install_record_exists(instance_dir, project_type, None, record))
       .map(|(id, record)| (id.clone(), record.version.clone()))
       .collect::<Vec<_>>(),
     "datapack" => {
@@ -632,6 +872,7 @@ fn collect_modrinth_records(
         .map(|entry| {
           entry
             .iter()
+            .filter(|(_, record)| install_record_exists(instance_dir, project_type, Some(world), record))
             .map(|(id, record)| (id.clone(), record.version.clone()))
             .collect::<Vec<_>>()
         })
@@ -674,16 +915,36 @@ pub(crate) fn list_modrinth_installs(
   let instance_dir = resolve_instance_dir(&instance_id, &state)?;
   let installs = load_modrinth_index(&instance_dir)?;
   let mut entries = match project_type.as_str() {
-    "mod" => installs.mods.keys().cloned().collect::<Vec<_>>(),
-    "resourcepack" => installs.resources.keys().cloned().collect::<Vec<_>>(),
-    "shader" => installs.shaders.keys().cloned().collect::<Vec<_>>(),
+    "mod" => installs
+      .mods
+      .iter()
+      .filter(|(_, record)| install_record_exists(&instance_dir, &project_type, None, record))
+      .map(|(id, _)| id.clone())
+      .collect::<Vec<_>>(),
+    "resourcepack" => installs
+      .resources
+      .iter()
+      .filter(|(_, record)| install_record_exists(&instance_dir, &project_type, None, record))
+      .map(|(id, _)| id.clone())
+      .collect::<Vec<_>>(),
+    "shader" => installs
+      .shaders
+      .iter()
+      .filter(|(_, record)| install_record_exists(&instance_dir, &project_type, None, record))
+      .map(|(id, _)| id.clone())
+      .collect::<Vec<_>>(),
     "datapack" => {
       let world = world_id
         .ok_or_else(|| "world id is required for datapacks".to_string())?;
       installs
         .datapacks
         .get(&world)
-        .map(|map| map.keys().cloned().collect::<Vec<_>>())
+        .map(|map| {
+          map.iter()
+            .filter(|(_, record)| install_record_exists(&instance_dir, &project_type, Some(&world), record))
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>()
+        })
         .unwrap_or_default()
     }
     _ => return Err("unsupported Modrinth project type".to_string()),
@@ -704,7 +965,7 @@ pub(crate) async fn list_modrinth_updates(
   let instance_dir = resolve_instance_dir(&instance_id, &state)?;
   tauri::async_runtime::spawn_blocking(move || {
     let installs = load_modrinth_index(&instance_dir)?;
-    let records = collect_modrinth_records(&installs, &project_type, world_id.as_deref())?;
+    let records = collect_modrinth_records(&instance_dir, &installs, &project_type, world_id.as_deref())?;
     let mut updates = Vec::new();
 
     for (project_id, installed_version) in records {

@@ -30,7 +30,6 @@ export default function Sidebar({ currentPage, setCurrentPage }: SidebarProps) {
 
   return (
     <aside className="w-64 shrink-0 min-h-0 h-full self-stretch bg-sidebar text-sidebar-foreground border-r border-sidebar-border flex flex-col">
-      {/* Header */}
       <div className="h-28 flex flex-col justify-center px-6 border-b border-sidebar-border">
         <h1 className="text-2xl font-bold tracking-tight">MONOLITH</h1>
         <p className="text-xs text-sidebar-foreground/60 mt-2 tracking-widest uppercase">
@@ -38,7 +37,6 @@ export default function Sidebar({ currentPage, setCurrentPage }: SidebarProps) {
         </p>
       </div>
 
-      {/* Menu */}
       <nav className="flex-1 min-h-0 overflow-y-hidden p-4 space-y-2">
         {menuItems.map((item) => {
           const Icon = item.icon;
@@ -61,10 +59,9 @@ export default function Sidebar({ currentPage, setCurrentPage }: SidebarProps) {
         })}
       </nav>
 
-      {/* Footer */}
       <div className="p-4 border-t border-sidebar-border text-xs text-sidebar-foreground/60">
         <div className="flex items-center justify-between">
-          <p>v0.2.1</p>
+          <p>v0.3.0</p>
           <button
             type="button"
             onClick={() => {

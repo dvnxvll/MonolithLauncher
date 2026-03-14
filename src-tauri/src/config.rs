@@ -5,6 +5,7 @@ use std::{
   io,
   path::{Path, PathBuf},
 };
+use crate::java::runtime_dedupe_key;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -178,10 +179,31 @@ pub struct Settings {
   pub java: JavaSettings,
   #[serde(default = "default_theme")]
   pub theme: String,
+  #[serde(default = "default_discord_presence")]
+  pub discord_presence: bool,
+  #[serde(default = "default_discord_presence_mode")]
+  pub discord_presence_mode: DiscordPresenceMode,
+  #[serde(default = "default_network_diagnostics")]
+  pub network_diagnostics: bool,
+  #[serde(default = "default_smart_network_optimization")]
+  pub smart_network_optimization: bool,
+  #[serde(default = "default_performance_gamemode")]
+  pub performance_gamemode: bool,
+  #[serde(default = "default_performance_mangohud")]
+  pub performance_mangohud: bool,
+  #[serde(default = "default_performance_zink")]
+  pub performance_zink: bool,
   #[serde(default = "default_microsoft_client_id")]
   pub microsoft_client_id: String,
   #[serde(default)]
   pub skipped_release_tag: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscordPresenceMode {
+  DynamicMinecraft,
+  DynamicMonolith,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -368,6 +390,13 @@ impl AppConfig {
           runtimes: Vec::new(),
         },
         theme: "dark".to_string(),
+        discord_presence: default_discord_presence(),
+        discord_presence_mode: default_discord_presence_mode(),
+        network_diagnostics: default_network_diagnostics(),
+        smart_network_optimization: default_smart_network_optimization(),
+        performance_gamemode: default_performance_gamemode(),
+        performance_mangohud: default_performance_mangohud(),
+        performance_zink: default_performance_zink(),
         microsoft_client_id: default_microsoft_client_id(),
         skipped_release_tag: None,
       },
@@ -377,6 +406,34 @@ impl AppConfig {
 
 fn default_theme() -> String {
   "dark".to_string()
+}
+
+fn default_discord_presence() -> bool {
+  true
+}
+
+fn default_discord_presence_mode() -> DiscordPresenceMode {
+  DiscordPresenceMode::DynamicMinecraft
+}
+
+fn default_network_diagnostics() -> bool {
+  true
+}
+
+fn default_smart_network_optimization() -> bool {
+  true
+}
+
+fn default_performance_gamemode() -> bool {
+  false
+}
+
+fn default_performance_mangohud() -> bool {
+  false
+}
+
+fn default_performance_zink() -> bool {
+  false
 }
 
 fn default_min_ram_mb() -> u32 {
@@ -542,7 +599,7 @@ fn normalize_ram_settings(config: &mut AppConfig) {
 fn normalize_java_runtimes(config: &mut AppConfig) {
   let mut seen = HashSet::new();
   config.settings.java.runtimes.retain(|runtime| {
-    let key = runtime.path.trim().to_string();
+    let key = runtime_dedupe_key(&runtime.path);
     if key.is_empty() {
       return false;
     }
@@ -561,7 +618,7 @@ fn normalize_java_runtimes(config: &mut AppConfig) {
         .java
         .runtimes
         .iter()
-        .any(|runtime| runtime.path == trimmed)
+        .any(|runtime| runtime_dedupe_key(&runtime.path) == runtime_dedupe_key(trimmed))
     {
       let label = config
         .settings

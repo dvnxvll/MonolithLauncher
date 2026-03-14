@@ -319,12 +319,14 @@ export default function CreateInstanceDialog({
               </label>
               <button
                 onClick={() => setIncludeSnapshots(!includeSnapshots)}
-                className={`relative w-10 h-6 rounded-full transition-all ${
-                  includeSnapshots ? "bg-emerald-500" : "bg-red-500"
+                className={`relative h-6 w-10 rounded-lg border transition-all ${
+                  includeSnapshots
+                    ? "border-emerald-500/35 bg-emerald-500/18 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.08)]"
+                    : "border-red-500/28 bg-red-500/14 shadow-[inset_0_0_0_1px_rgba(239,68,68,0.06)]"
                 }`}
               >
                 <div
-                  className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-foreground transition-transform ${
+                  className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-md border border-border/70 bg-foreground/95 shadow-sm transition-transform ${
                     includeSnapshots ? "translate-x-4" : "translate-x-0"
                   }`}
                 />

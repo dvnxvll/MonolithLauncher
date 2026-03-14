@@ -13,6 +13,9 @@ import { invoke } from "@/lib/tauri";
 export default function Overview() {
   const { config, loading, refreshConfig, setStatus } = useLauncher();
   const instances = config?.instances ?? [];
+  const [ramOverrides, setRamOverrides] = useState<
+    Record<string, { min: number | null; max: number | null }>
+  >({});
   const [showDialog, setShowDialog] = useState(false);
   const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>(
     null,
@@ -117,15 +120,38 @@ export default function Overview() {
   };
 
   const resolveRamLabel = (instance: Instance) => {
+    const override = ramOverrides[instance.id];
     const minRam =
-      instance.java_min_ram_mb ?? config?.settings?.java?.min_ram_mb ?? null;
+      override?.min ??
+      instance.java_min_ram_mb ??
+      config?.settings?.java?.min_ram_mb ??
+      null;
     const maxRam =
-      instance.java_max_ram_mb ?? config?.settings?.java?.max_ram_mb ?? null;
+      override?.max ??
+      instance.java_max_ram_mb ??
+      config?.settings?.java?.max_ram_mb ??
+      null;
     if (!minRam || !maxRam) {
       return "Default RAM";
     }
     return `${formatRamValue(minRam)} - ${formatRamValue(maxRam)}`;
   };
+
+  useEffect(() => {
+    setRamOverrides((prev) => {
+      const next = { ...prev };
+      for (const instance of instances) {
+        const override = next[instance.id];
+        if (!override) continue;
+        const currentMin = instance.java_min_ram_mb ?? null;
+        const currentMax = instance.java_max_ram_mb ?? null;
+        if (override.min === currentMin && override.max === currentMax) {
+          delete next[instance.id];
+        }
+      }
+      return next;
+    });
+  }, [instances]);
 
   const handleTogglePin = async (target: Instance) => {
     try {
@@ -143,11 +169,10 @@ export default function Overview() {
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      {/* Header */}
-      <div className="sticky top-0 z-20 h-28 flex items-center border-b border-border px-8 bg-background">
-        <div className="flex items-center justify-between w-full">
+      <div className="sticky top-0 z-20 border-b border-border bg-background px-4 py-4 md:px-6 xl:px-8">
+        <div className="flex min-h-[79px] w-full flex-col justify-center gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-4xl font-bold">Instances</h2>
+            <h2 className="text-3xl font-bold md:text-4xl">Instances</h2>
             <p className="text-foreground/60 text-sm mt-1">
               Manage and configure your game instances
             </p>
@@ -164,10 +189,8 @@ export default function Overview() {
         </div>
       </div>
 
-      {/* Main Content */}
-      <div className="flex-1 min-h-0 overflow-hidden flex">
-        {/* Left Panel - Instance List */}
-        <div className="w-80 min-h-0 border-r border-border overflow-y-auto bg-card/30">
+      <div className="flex-1 min-h-0 overflow-hidden flex flex-col xl:flex-row">
+        <div className="w-full border-b border-border bg-card/30 xl:w-80 xl:min-h-0 xl:border-b-0 xl:border-r xl:overflow-y-auto">
           {instances.length === 0 ? (
             <div className="p-8 flex flex-col items-center justify-center h-full">
               <p className="text-foreground/60 text-center mb-6">
@@ -192,13 +215,14 @@ export default function Overview() {
                   className="w-full bg-input border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
                 />
               </div>
-              <div className="p-4 space-y-2">
+              <div className="p-4">
                 {filteredInstances.length === 0 ? (
                   <div className="text-sm text-foreground/60 text-center py-8">
                     No instances match your search.
                   </div>
                 ) : (
-                  filteredInstances.map((instance) => (
+                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+                    {filteredInstances.map((instance) => (
                     <button
                       key={instance.id}
                       onClick={() => setSelectedInstanceId(instance.id)}
@@ -241,29 +265,37 @@ export default function Overview() {
                         </span>
                       </div>
                     </button>
-                  ))
+                    ))}
+                  </div>
                 )}
               </div>
             </div>
           )}
         </div>
 
-        {/* Right Panel - Instance Tabs */}
         {selectedInstance ? (
           <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
-            {/* Instance Header Bar */}
-            <div className="border-b border-border px-8 py-4 bg-card flex items-center justify-between gap-4">
+            <div className="border-b border-border bg-card px-4 py-4 md:px-6 xl:px-8">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <h1 className="text-2xl font-bold">{selectedInstance.name}</h1>
-              <div className="flex items-center gap-3 text-sm text-foreground/70">
+              <div className="flex flex-wrap items-center gap-3 text-sm text-foreground/70">
                 <span className="font-mono">
                   {activeAccount?.display_name ?? "No account"}
                 </span>
                 {renderOwnershipBadge()}
               </div>
+              </div>
             </div>
 
-            {/* Tabs Component */}
-            <OverviewTabs instance={selectedInstance} />
+            <OverviewTabs
+              instance={selectedInstance}
+              onRamSaved={(instanceId, min, max) => {
+                setRamOverrides((prev) => ({
+                  ...prev,
+                  [instanceId]: { min, max },
+                }));
+              }}
+            />
           </div>
         ) : (
           <div className="flex-1 flex items-center justify-center">

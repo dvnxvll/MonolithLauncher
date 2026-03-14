@@ -1,6 +1,9 @@
-use regex::Regex;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::config::ConfigStore;
+use crate::diagnostics::refresh_saved_java_runtimes;
+use crate::java::{detect_java_version, discover_java_runtimes};
 
 const DEFAULT_UPDATE_REPO: &str = "dvnxvll/MonolithLauncher";
 
@@ -68,12 +71,28 @@ pub(crate) fn ping() -> String {
 
 #[tauri::command]
 pub(crate) fn detect_java() -> Result<JavaDetection, String> {
-  let java_path = find_java_binary().ok();
-  let version = detect_java_version(java_path.as_deref().unwrap_or("java"));
+  let runtimes = discover_java_runtimes(None);
+  let java_path = runtimes.first().map(|entry| entry.path.clone());
+  let version = java_path
+    .as_deref()
+    .and_then(detect_java_version)
+    .or_else(|| detect_java_version("java"));
   Ok(JavaDetection {
     path: java_path,
     version,
   })
+}
+
+#[tauri::command]
+pub(crate) fn scan_java_runtimes(
+  state: tauri::State<'_, std::sync::Mutex<ConfigStore>>,
+) -> Result<Vec<crate::config::JavaRuntimeEntry>, String> {
+  let mut store = state.lock().map_err(|_| "config store lock poisoned".to_string())?;
+  let mut config = store.get();
+  refresh_saved_java_runtimes(&mut config);
+  let runtimes = config.settings.java.runtimes.clone();
+  store.set(config).map_err(|err| err.to_string())?;
+  Ok(runtimes)
 }
 
 #[tauri::command]
@@ -217,31 +236,4 @@ fn env_truthy(key: &str) -> bool {
     value.trim().to_ascii_lowercase().as_str(),
     "1" | "true" | "yes" | "on"
   )
-}
-
-fn find_java_binary() -> Result<String, String> {
-  let output = if cfg!(target_os = "windows") {
-    Command::new("where").arg("java").output()
-  } else {
-    Command::new("which").arg("java").output()
-  }
-  .map_err(|err| err.to_string())?;
-
-  if !output.status.success() {
-    return Err("java not found in PATH".to_string());
-  }
-
-  let stdout = String::from_utf8_lossy(&output.stdout);
-  let first = stdout.lines().next().ok_or_else(|| "java path missing".to_string())?;
-  Ok(first.trim().to_string())
-}
-
-fn detect_java_version(java_cmd: &str) -> Option<String> {
-  let output = Command::new(java_cmd).arg("-version").output().ok()?;
-  let combined = String::from_utf8_lossy(&output.stderr).to_string()
-    + &String::from_utf8_lossy(&output.stdout);
-  let re = Regex::new(r#""(\d+)(?:\.\d+)*""#).ok()?;
-  re.captures(&combined)
-    .and_then(|cap| cap.get(1))
-    .map(|m| m.as_str().to_string())
 }

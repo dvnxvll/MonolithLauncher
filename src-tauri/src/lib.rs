@@ -1,9 +1,12 @@
 mod config;
 mod commands;
+mod diagnostics;
+mod java;
 mod minecraft;
 mod modrinth;
 
-use config::{AppConfig, ConfigStore, Instance};
+use config::{AppConfig, ConfigStore, DiscordPresenceMode, Instance, Loader};
+use diagnostics::classify_launch_failure;
 use minecraft::{
   create_instance as create_instance_impl, list_fabric_game_versions as list_fabric_games_impl,
   list_fabric_loader_versions as list_fabric_loaders_impl,
@@ -18,7 +21,7 @@ use std::{
   net::TcpListener,
   path::PathBuf,
   process::Command,
-  sync::{Arc, Mutex},
+  sync::{Arc, Mutex, mpsc},
   thread,
   time::{SystemTime, UNIX_EPOCH},
 };
@@ -59,21 +62,41 @@ fn discord_set_menu_activity(state: &tauri::State<'_, Mutex<DiscordRpcState>>) {
     Ok(guard) => guard,
     Err(poisoned) => poisoned.into_inner(),
   };
-  if let Some(client) = guard.client.as_mut() {
-    let _ = client.set_activity(|activity| {
-      activity
-        .assets(|assets| assets.large_image(DISCORD_LARGE_IMAGE))
-    });
-  }
+  guard.set_menu_activity();
 }
 
-fn discord_clear_activity(state: &tauri::State<'_, Mutex<DiscordRpcState>>) {
+fn discord_set_running_activity(
+  state: &tauri::State<'_, Mutex<DiscordRpcState>>,
+  instance: &Instance,
+) {
   let mut guard = match state.lock() {
     Ok(guard) => guard,
     Err(poisoned) => poisoned.into_inner(),
   };
-  if let Some(client) = guard.client.as_mut() {
-    let _ = client.clear_activity();
+  guard.set_running_instance(resolve_presence_instance_label(instance));
+}
+
+fn discord_track_runtime_signal(
+  state: &tauri::State<'_, Mutex<DiscordRpcState>>,
+  line: &str,
+) {
+  let mut guard = match state.lock() {
+    Ok(guard) => guard,
+    Err(poisoned) => poisoned.into_inner(),
+  };
+  guard.update_runtime_signal(line);
+}
+
+fn resolve_presence_instance_label(instance: &Instance) -> String {
+  format!("{} {}", loader_presence_label(&instance.loader), instance.version)
+}
+
+fn loader_presence_label(loader: &Loader) -> &'static str {
+  match loader {
+    Loader::Vanilla => "Vanilla",
+    Loader::Fabric => "Fabric",
+    Loader::Forge => "Forge",
+    Loader::NeoForge => "NeoForge",
   }
 }
 
@@ -581,19 +604,215 @@ struct InstanceMetrics {
 const DISCORD_APP_ID: u64 = 1468203692716064883;
 const DISCORD_LARGE_IMAGE: &str = "monolithicon";
 
-struct DiscordRpcState {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MonolithRuntimeState {
+  InMainMenu,
+  PlayingSingleplayer,
+  PlayingMultiplayer,
+}
+
+enum DiscordRpcCommand {
+  SetConfig {
+    enabled: bool,
+    mode: DiscordPresenceMode,
+  },
+  SetMenuActivity,
+  SetRunningInstance(String),
+  UpdateRuntimeSignal(String),
+}
+
+pub(crate) struct DiscordRpcState {
+  tx: mpsc::Sender<DiscordRpcCommand>,
+}
+
+struct DiscordRpcWorkerState {
   client: Option<DiscordClient>,
+  enabled: bool,
+  mode: DiscordPresenceMode,
+  runtime_state: MonolithRuntimeState,
+  running_instance_label: Option<String>,
+  rpc_started_at_unix: u64,
+}
+
+impl DiscordRpcWorkerState {
+  fn new() -> Self {
+    Self {
+      client: None,
+      enabled: false,
+      mode: DiscordPresenceMode::DynamicMinecraft,
+      runtime_state: MonolithRuntimeState::InMainMenu,
+      running_instance_label: None,
+      rpc_started_at_unix: SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs(),
+    }
+  }
+
+  fn apply_command(&mut self, command: DiscordRpcCommand) {
+    match command {
+      DiscordRpcCommand::SetConfig { enabled, mode } => self.set_config(enabled, mode),
+      DiscordRpcCommand::SetMenuActivity => self.set_menu_activity(),
+      DiscordRpcCommand::SetRunningInstance(label) => self.set_running_instance(label),
+      DiscordRpcCommand::UpdateRuntimeSignal(line) => self.update_runtime_signal(&line),
+    }
+  }
+
+  fn set_config(&mut self, enabled: bool, mode: DiscordPresenceMode) {
+    self.enabled = enabled;
+    self.mode = mode;
+    if !enabled {
+      if let Some(client) = self.client.as_mut() {
+        let _ = client.clear_activity();
+      }
+      self.client = None;
+      self.running_instance_label = None;
+      return;
+    }
+    if self.client.is_none() {
+      let mut client = DiscordClient::new(DISCORD_APP_ID);
+      client.start();
+      self.client = Some(client);
+    }
+    self.refresh_activity();
+  }
+
+  fn set_menu_activity(&mut self) {
+    self.running_instance_label = None;
+    self.runtime_state = MonolithRuntimeState::InMainMenu;
+    self.refresh_activity();
+  }
+
+  fn set_running_instance(&mut self, label: String) {
+    self.running_instance_label = Some(label);
+    self.runtime_state = MonolithRuntimeState::InMainMenu;
+    self.refresh_activity();
+  }
+
+  fn update_runtime_signal(&mut self, line: &str) {
+    if !self.enabled || self.mode != DiscordPresenceMode::DynamicMonolith {
+      return;
+    }
+    if self.running_instance_label.is_none() {
+      return;
+    }
+    let lower = line.to_ascii_lowercase();
+    let next = if lower.contains("connecting to")
+      || lower.contains("multiplayer")
+      || lower.contains("joined server")
+      || lower.contains("disconnect.genericreason")
+    {
+      Some(MonolithRuntimeState::PlayingMultiplayer)
+    } else if lower.contains("title screen")
+      || lower.contains("main menu")
+    {
+      Some(MonolithRuntimeState::InMainMenu)
+    } else if lower.contains("integrated server")
+      || lower.contains("singleplayer")
+      || lower.contains("local game hosted")
+    {
+      Some(MonolithRuntimeState::PlayingSingleplayer)
+    } else {
+      None
+    };
+
+    if let Some(next_state) = next {
+      if self.runtime_state != next_state {
+        self.runtime_state = next_state;
+        self.refresh_activity();
+      }
+    }
+  }
 }
 
 impl DiscordRpcState {
-  fn new() -> Self {
-    let mut client = DiscordClient::new(DISCORD_APP_ID);
-    client.start();
-    let _ = client.set_activity(|activity| {
-      activity
-        .assets(|assets| assets.large_image(DISCORD_LARGE_IMAGE))
+  fn new(enabled: bool, mode: DiscordPresenceMode) -> Self {
+    let (tx, rx) = mpsc::channel::<DiscordRpcCommand>();
+    thread::spawn(move || {
+      let mut worker = DiscordRpcWorkerState::new();
+      worker.apply_command(DiscordRpcCommand::SetConfig { enabled, mode });
+      worker.apply_command(DiscordRpcCommand::SetMenuActivity);
+      while let Ok(command) = rx.recv() {
+        worker.apply_command(command);
+      }
     });
-    Self { client: Some(client) }
+    Self { tx }
+  }
+
+  pub(crate) fn set_config(&mut self, enabled: bool, mode: DiscordPresenceMode) {
+    let _ = self.tx.send(DiscordRpcCommand::SetConfig { enabled, mode });
+  }
+
+  pub(crate) fn set_menu_activity(&mut self) {
+    let _ = self.tx.send(DiscordRpcCommand::SetMenuActivity);
+  }
+
+  pub(crate) fn set_running_instance(&mut self, label: String) {
+    let _ = self.tx.send(DiscordRpcCommand::SetRunningInstance(label));
+  }
+
+  pub(crate) fn update_runtime_signal(&mut self, line: &str) {
+    let lower = line.to_ascii_lowercase();
+    let is_signal = lower.contains("connecting to")
+      || lower.contains("multiplayer")
+      || lower.contains("joined server")
+      || lower.contains("disconnect.genericreason")
+      || lower.contains("title screen")
+      || lower.contains("main menu")
+      || lower.contains("integrated server")
+      || lower.contains("singleplayer")
+      || lower.contains("local game hosted");
+    if is_signal {
+      let _ = self.tx.send(DiscordRpcCommand::UpdateRuntimeSignal(lower));
+    }
+  }
+}
+
+impl DiscordRpcWorkerState {
+  fn refresh_activity(&mut self) {
+    if !self.enabled {
+      return;
+    }
+    let Some(client) = self.client.as_mut() else {
+      return;
+    };
+    match (&self.mode, self.running_instance_label.as_deref()) {
+      (DiscordPresenceMode::DynamicMinecraft, Some(_)) => {
+        let _ = client.clear_activity();
+      }
+      (DiscordPresenceMode::DynamicMinecraft, None) => {
+        let _ = client.set_activity(|activity| {
+          activity
+            .details("Idling")
+            .state("Monolith Launcher")
+            .timestamps(|timestamps| timestamps.start(self.rpc_started_at_unix))
+            .assets(|assets| assets.large_image(DISCORD_LARGE_IMAGE))
+        });
+      }
+      (DiscordPresenceMode::DynamicMonolith, Some(instance_label)) => {
+        let details = match self.runtime_state {
+          MonolithRuntimeState::InMainMenu => "In Main Menu",
+          MonolithRuntimeState::PlayingSingleplayer => "Playing Singleplayer",
+          MonolithRuntimeState::PlayingMultiplayer => "Playing Multiplayer",
+        };
+        let _ = client.set_activity(|activity| {
+          activity
+            .details(details)
+            .state(instance_label)
+            .timestamps(|timestamps| timestamps.start(self.rpc_started_at_unix))
+            .assets(|assets| assets.large_image(DISCORD_LARGE_IMAGE))
+        });
+      }
+      (DiscordPresenceMode::DynamicMonolith, None) => {
+        let _ = client.set_activity(|activity| {
+          activity
+            .details("Idling")
+            .state("Monolith Launcher")
+            .timestamps(|timestamps| timestamps.start(self.rpc_started_at_unix))
+            .assets(|assets| assets.large_image(DISCORD_LARGE_IMAGE))
+        });
+      }
+    }
   }
 }
 
@@ -690,7 +909,7 @@ fn get_instance_metrics(
   if let Some(proc) = process {
     let rss_bytes = proc.memory();
     let rss_mb = rss_bytes as f32 / (1024.0 * 1024.0);
-    let cpu_load_pct = proc.cpu_usage().max(0.0);
+    let cpu_load_pct = proc.cpu_usage().clamp(0.0, 100.0);
     let gpu_load_pct = read_gpu_load_pct();
     return Ok(Some(InstanceMetrics {
       rss_mb,
@@ -914,12 +1133,14 @@ async fn launch_instance(
     store.set(config.clone()).map_err(|err| err.to_string())?;
     config
   };
+  let config_for_error = config.clone();
 
   let launch_window = window.clone();
   let instance_id_clone = instance_id.clone();
   let log_window = window.clone();
   let log_instance_id = instance_id.clone();
   let app_handle = window.app_handle();
+  let log_handle = app_handle.clone();
   let exit_instance_id = instance_id.clone();
   let exit_handle = app_handle.clone();
   let result = tauri::async_runtime::spawn_blocking(move || {
@@ -933,6 +1154,10 @@ async fn launch_instance(
         stream: stream.to_string(),
       };
       let _ = log_window.emit("instance:log", payload);
+      if stream == "stdout" || stream == "stderr" {
+        let discord_state = log_handle.state::<Mutex<DiscordRpcState>>();
+        discord_track_runtime_signal(&discord_state, line);
+      }
     });
     let on_exit = Arc::new(move |pid: u32| {
       handle_instance_exit(&exit_handle, &exit_instance_id, pid);
@@ -947,13 +1172,28 @@ async fn launch_instance(
       if let Ok(mut map) = running.lock() {
         map.insert(instance_id.clone(), pid);
       }
-      discord_clear_activity(&discord);
+      if let Some(instance_meta) = config_for_error
+        .instances
+        .iter()
+        .find(|item| item.id == instance_id)
+      {
+        discord_set_running_activity(&discord, instance_meta);
+      } else {
+        discord_set_menu_activity(&discord);
+      }
       let _ = window.emit("launch:started", pid);
       Ok(pid)
     }
     Err(err) => {
-      let _ = window.emit("launch:error", err.clone());
-      Err(err)
+        let enriched = config_for_error
+        .instances
+        .iter()
+        .find(|item| item.id == instance_id)
+        .and_then(|instance| classify_launch_failure(&config_for_error, instance, &err))
+        .map(|diagnostic| format!("{} Suggested fix: {}", err, diagnostic.suggested_fix.unwrap_or(diagnostic.summary)))
+        .unwrap_or(err.clone());
+      let _ = window.emit("launch:error", enriched.clone());
+      Err(enriched)
     }
   }
 }
@@ -973,13 +1213,16 @@ pub fn run() {
 
       let config_path = app.path().app_config_dir()?.join("config.json");
       let store = ConfigStore::load(config_path)?;
+      let runtime_config = store.get();
+      let discord_enabled = runtime_config.settings.discord_presence;
+      let discord_mode = runtime_config.settings.discord_presence_mode;
       let mut metrics_system = System::new();
       metrics_system.refresh_processes();
       app.manage(Mutex::new(store));
       app.manage(Mutex::new(HashMap::<String, u32>::new()));
       app.manage(Mutex::new(metrics_system));
       app.manage(Mutex::new(MicrosoftLoginState::default()));
-      app.manage(Mutex::new(DiscordRpcState::new()));
+      app.manage(Mutex::new(DiscordRpcState::new(discord_enabled, discord_mode)));
       Ok(())
     })
     .invoke_handler(tauri::generate_handler![
@@ -991,9 +1234,16 @@ pub fn run() {
       commands::instances::set_instance_pinned,
       commands::instances::remove_instance,
       commands::instances::repair_instance,
+      commands::instances::get_instance_preflight,
+      commands::instances::list_instance_snapshots,
+      commands::instances::create_instance_snapshot,
+      commands::instances::restore_instance_snapshot,
+      commands::instances::delete_instance_snapshot,
+      commands::instances::set_instance_java_override,
       commands::system::open_external,
       commands::system::check_latest_release,
       commands::system::detect_java,
+      commands::system::scan_java_runtimes,
       commands::config::export_config,
       commands::instances::import_instance,
       start_microsoft_login,
@@ -1002,20 +1252,26 @@ pub fn run() {
       check_minecraft_ownership,
       commands::packs::list_instance_mods,
       commands::packs::toggle_mod,
+      commands::packs::delete_mod,
       commands::packs::list_instance_packs,
       commands::packs::toggle_instance_pack,
+      commands::packs::delete_instance_pack,
       commands::packs::list_instance_datapacks,
       commands::packs::toggle_instance_datapack,
+      commands::packs::delete_instance_datapack,
       commands::worlds::list_instance_worlds,
       commands::servers::list_instance_servers,
       commands::servers::save_instance_servers,
+      commands::servers::analyze_server_latency,
       commands::worlds::update_instance_world,
       commands::instances::open_instance_path,
       commands::packs::open_instance_datapacks,
       commands::instances::update_instance_settings,
       commands::instances::update_instance_loader_version,
       modrinth::search_modrinth_projects,
+      modrinth::get_modrinth_install_plan,
       modrinth::install_modrinth_project,
+      modrinth::update_modrinth_project,
       modrinth::uninstall_modrinth_project,
       modrinth::list_modrinth_installs,
       modrinth::list_modrinth_updates,

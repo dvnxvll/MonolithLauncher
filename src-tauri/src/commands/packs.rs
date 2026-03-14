@@ -271,6 +271,14 @@ fn resolve_datapack_dir(instance_dir: &Path, world_id: &str) -> PathBuf {
   instance_dir.join("saves").join(world_id).join("datapacks")
 }
 
+fn remove_path(path: &Path) -> Result<(), String> {
+  if path.is_dir() {
+    fs::remove_dir_all(path).map_err(|err| err.to_string())
+  } else {
+    fs::remove_file(path).map_err(|err| err.to_string())
+  }
+}
+
 #[tauri::command]
 pub(crate) fn list_instance_mods(
   instance_id: String,
@@ -338,6 +346,20 @@ pub(crate) fn toggle_mod(
   };
   fs::rename(source, target).map_err(|err| err.to_string())?;
   Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn delete_mod(
+  instance_id: String,
+  filename: String,
+  state: tauri::State<'_, Mutex<ConfigStore>>,
+) -> Result<(), String> {
+  let instance_dir = resolve_instance_dir(&instance_id, &state)?;
+  let path = instance_dir.join("mods").join(&filename);
+  if !path.exists() {
+    return Err("mod file not found".to_string());
+  }
+  remove_path(&path)
 }
 
 #[tauri::command]
@@ -414,6 +436,23 @@ pub(crate) fn toggle_instance_pack(
 }
 
 #[tauri::command]
+pub(crate) fn delete_instance_pack(
+  instance_id: String,
+  kind: String,
+  filename: String,
+  state: tauri::State<'_, Mutex<ConfigStore>>,
+) -> Result<(), String> {
+  let instance_dir = resolve_instance_dir(&instance_id, &state)?;
+  let pack_dir = resolve_pack_dir(&instance_dir, &kind)
+    .ok_or_else(|| "unsupported pack kind".to_string())?;
+  let path = pack_dir.join(&filename);
+  if !path.exists() {
+    return Err("pack file not found".to_string());
+  }
+  remove_path(&path)
+}
+
+#[tauri::command]
 pub(crate) fn list_instance_datapacks(
   instance_id: String,
   world_id: String,
@@ -476,6 +515,22 @@ pub(crate) fn toggle_instance_datapack(
   };
   fs::rename(source, target).map_err(|err| err.to_string())?;
   Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn delete_instance_datapack(
+  instance_id: String,
+  world_id: String,
+  filename: String,
+  state: tauri::State<'_, Mutex<ConfigStore>>,
+) -> Result<(), String> {
+  let instance_dir = resolve_instance_dir(&instance_id, &state)?;
+  let datapack_dir = resolve_datapack_dir(&instance_dir, &world_id);
+  let path = datapack_dir.join(&filename);
+  if !path.exists() {
+    return Err("datapack not found".to_string());
+  }
+  remove_path(&path)
 }
 
 #[tauri::command]

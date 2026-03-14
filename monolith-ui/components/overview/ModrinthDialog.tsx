@@ -45,6 +45,7 @@ export interface ModrinthState {
   query: string;
   results: ModrinthProjectHit[];
   loading: boolean;
+  hasLoaded: boolean;
   error: string | null;
   sort: ModrinthSort;
   filters: ModrinthFilters;
@@ -69,6 +70,7 @@ interface ModrinthDialogProps {
   onToggleOpenSource: () => void;
   onToggleShowAllVersions: () => void;
   onInstall: (project: ModrinthProjectHit) => void;
+  onUpdate: (project: ModrinthProjectHit) => void;
   onUninstall: (project: ModrinthProjectHit) => void;
   isInstalling: (projectId: string) => boolean;
   isUninstalling: (projectId: string) => boolean;
@@ -148,6 +150,7 @@ export default function ModrinthDialog({
   onToggleOpenSource,
   onToggleShowAllVersions,
   onInstall,
+  onUpdate,
   onUninstall,
   isInstalling,
   isUninstalling,
@@ -371,8 +374,19 @@ export default function ModrinthDialog({
           {errorMessage ? (
             <div className="text-sm text-destructive">{errorMessage}</div>
           ) : null}
-          {!state.loading && results.length === 0 ? (
-            <div className="text-sm text-foreground/60">No results found.</div>
+          {state.loading && !state.hasLoaded ? (
+            <div className="text-sm text-foreground/60">
+              {state.query.trim()
+                ? "Searching Modrinth..."
+                : `Loading popular ${meta.label.toLowerCase()}...`}
+            </div>
+          ) : null}
+          {!state.loading && state.hasLoaded && results.length === 0 ? (
+            <div className="text-sm text-foreground/60">
+              {state.query.trim()
+                ? "No results found."
+                : `No ${meta.label.toLowerCase()} found for this Minecraft version.`}
+            </div>
           ) : null}
           {results.length > 0 ? (
             <div className="space-y-3">
@@ -380,6 +394,7 @@ export default function ModrinthDialog({
                 const installed = installedProjects.has(project.project_id);
                 const updateAvailable =
                   installed && updateProjects.has(project.project_id);
+                const supportsManagedUpdate = kind === "mods";
                 const installing = isInstalling(project.project_id);
                 const uninstalling = isUninstalling(project.project_id);
                 const busy = installing || uninstalling;
@@ -409,7 +424,7 @@ export default function ModrinthDialog({
                               Installed
                             </span>
                           ) : null}
-                          {updateAvailable ? (
+                          {supportsManagedUpdate && updateAvailable ? (
                             <span className="ml-2 text-[10px] uppercase tracking-widest text-amber-300">
                               Update Available
                             </span>
@@ -419,15 +434,24 @@ export default function ModrinthDialog({
                           <Button
                             size="sm"
                             className="bg-primary text-primary-foreground hover:bg-primary/90"
-                            onClick={() => onInstall(project)}
-                            disabled={busy || (installed && !updateAvailable)}
+                            onClick={() =>
+                              installed && updateAvailable && supportsManagedUpdate
+                                ? onUpdate(project)
+                                : onInstall(project)
+                            }
+                            disabled={
+                              busy ||
+                              (supportsManagedUpdate
+                                ? installed && !updateAvailable
+                                : installed)
+                            }
                           >
                             {busy && installing
-                              ? installed && updateAvailable
+                              ? installed && updateAvailable && supportsManagedUpdate
                                 ? "Updating..."
                                 : "Installing..."
                               : installed
-                                ? updateAvailable
+                                ? updateAvailable && supportsManagedUpdate
                                   ? "Update"
                                   : "Installed"
                                 : "Install"}

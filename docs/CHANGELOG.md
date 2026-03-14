@@ -1,5 +1,55 @@
 # Changelogs
 
+## v0.3.0 - 2026-03-14
+
+### Added
+- Instance diagnostics and recovery workflow:
+  - preflight checks with actionable diagnostics
+  - snapshot management (create, restore, delete)
+  - repair flow with automatic pre-repair snapshot when available.
+- Java runtime management improvements:
+  - runtime discovery and scan command
+  - per-instance Java override support.
+- Server network diagnostics with latency probing (median/loss/jitter reporting).
+- New User Tips flow with contextual highlighting, auto-scroll to target controls, and replay button.
+- Linux runtime performance toggles:
+  - GameMode wrapper (`gamemoderun`)
+  - MangoHud wrapper/fallback
+  - Zink environment override
+  - smart network JVM flag injection.
+
+### Improved
+- Instance console and telemetry panel:
+  - expanded log ingestion from launcher streams plus `latest.log`, `debug.log`, and `chat.log`
+  - severity/stream-aware log coloring and static scroll container sizing
+  - RAM/CPU/GPU graph hover indicator with aligned tooltip and clearer metric tracking.
+- Update notifier UX:
+  - refined visual style and alignment
+  - sidebar footer update-check trigger
+  - per-version "never show again" behavior saved on dismiss.
+- Instance loader UX:
+  - recommended loader markers in selection lists
+  - explicit loader version change controls in instance settings.
+- Modrinth integration:
+  - installed mods with newer versions now surface an `Update` action
+  - dependency planning/install support for required dependencies.
+- Pack/content management:
+  - `.txt` entries are skipped in pack/content listing views
+  - pack sync includes `options.txt`.
+- Settings controls:
+  - switches now use clear enabled/disabled color states (green/red).
+
+### Fixed
+- RAM unit formatting now correctly auto-scales between MB and GB with decimal precision.
+- Instance CPU usage polling path now reports active process load correctly.
+- Instance card RAM label now reflects per-instance RAM overrides after settings updates.
+- Nightly release artifact upload no longer fails on directories (files-only collection before publish).
+- Windows builder flow now avoids missing bundle toolchains by defaulting to `exe` output unless bundling is explicitly enabled.
+
+### Changed
+- Project version bumped to `0.3.0` across backend and UI metadata.
+- Previous deployed stable version: `0.2.1`.
+
 ## v0.2.1 - 2026-03-06
 
 ### Fixed

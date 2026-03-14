@@ -1,4 +1,5 @@
 use crate::config::{AccountKind, AppConfig, Instance, Loader};
+use crate::java::{detect_java_version, resolve_java_command};
 use crate::minecraft::download::{download_to, load_json};
 use crate::minecraft::instance::ensure_instance_ready;
 use crate::minecraft::models::{
@@ -12,7 +13,6 @@ use crate::minecraft::util::{
 use crate::minecraft::{DEFAULT_LIBRARIES_URL};
 use std::{
   collections::{BTreeSet, HashMap, HashSet},
-  env,
   fs::{self, File},
   io::{BufRead, BufReader, Read, Seek, SeekFrom},
   net::ToSocketAddrs,
@@ -153,6 +153,9 @@ pub fn launch_instance(
   if let Some(extra) = &instance.jvm_args {
     jvm_args.extend(extra.split_whitespace().map(String::from));
   }
+  if config.settings.smart_network_optimization {
+    apply_smart_network_jvm_flags(&mut jvm_args);
+  }
   jvm_args.push("-cp".to_string());
   jvm_args.push(classpath);
 
@@ -179,8 +182,63 @@ pub fn launch_instance(
     &main_class_name,
     &final_args,
   );
-  let mut command = Command::new(&java_cmd);
-  command.args(&final_args);
+  let mut launch_entrypoint = java_cmd.clone();
+  let mut launch_args = final_args.clone();
+  let mut fallback_mangohud_env = false;
+  if cfg!(target_os = "linux") {
+    let mut wrappers = Vec::new();
+    if config.settings.performance_gamemode {
+      if command_exists_in_path("gamemoderun") {
+        wrappers.push("gamemoderun".to_string());
+      } else {
+        log(
+          "launcher",
+          "GameMode is enabled, but 'gamemoderun' was not found in PATH. Skipping wrapper.",
+        );
+      }
+    }
+    if config.settings.performance_mangohud {
+      if command_exists_in_path("mangohud") {
+        wrappers.push("mangohud".to_string());
+      } else {
+        fallback_mangohud_env = true;
+        log(
+          "launcher",
+          "MangoHud is enabled, but 'mangohud' was not found in PATH. Falling back to MANGOHUD=1.",
+        );
+      }
+    }
+    if !wrappers.is_empty() {
+      launch_entrypoint = wrappers[0].clone();
+      let mut wrapped_args = wrappers[1..].to_vec();
+      wrapped_args.push(java_cmd.clone());
+      wrapped_args.extend(final_args.clone());
+      launch_args = wrapped_args;
+      log(
+        "launcher",
+        &format!(
+          "Linux launch wrappers active: {}",
+          wrappers.join(" -> ")
+        ),
+      );
+    }
+  }
+
+  let mut command = Command::new(&launch_entrypoint);
+  command.args(&launch_args);
+  if cfg!(target_os = "linux") {
+    if fallback_mangohud_env {
+      command.env("MANGOHUD", "1");
+    }
+    if config.settings.performance_zink {
+      command.env("MESA_LOADER_DRIVER_OVERRIDE", "zink");
+      command.env("GALLIUM_DRIVER", "zink");
+      log(
+        "launcher",
+        "Zink override enabled: MESA_LOADER_DRIVER_OVERRIDE=zink, GALLIUM_DRIVER=zink",
+      );
+    }
+  }
   command.current_dir(&instance_dir);
   command.stdout(Stdio::piped());
   command.stderr(Stdio::piped());
@@ -201,7 +259,7 @@ pub fn launch_instance(
   }
   let mut child = command
     .spawn()
-    .map_err(|err| format!("failed to launch java ({}): {}", java_cmd, err))?;
+    .map_err(|err| format!("failed to launch process ({}): {}", launch_entrypoint, err))?;
 
   if let Some(stdout) = child.stdout.take() {
     let log = log.clone();
@@ -265,6 +323,36 @@ fn merge_ignore_list_with_jar_name(jvm_args: &mut [String], jar_path: &Path) {
         arg.push_str(jar_name);
       }
       break;
+    }
+  }
+}
+
+fn has_jvm_system_property(jvm_args: &[String], key: &str) -> bool {
+  let exact = format!("-D{}", key);
+  let prefix = format!("-D{}=", key);
+  jvm_args
+    .iter()
+    .any(|arg| arg == &exact || arg.starts_with(&prefix))
+}
+
+fn command_exists_in_path(binary: &str) -> bool {
+  let Some(path_var) = std::env::var_os("PATH") else {
+    return false;
+  };
+  std::env::split_paths(&path_var)
+    .map(|base| base.join(binary))
+    .any(|candidate| candidate.is_file())
+}
+
+fn apply_smart_network_jvm_flags(jvm_args: &mut Vec<String>) {
+  for (key, value) in [
+    ("java.net.preferIPv4Stack", "true"),
+    ("java.net.preferIPv6Addresses", "false"),
+    ("sun.net.inetaddr.ttl", "60"),
+    ("sun.net.inetaddr.negative.ttl", "10"),
+  ] {
+    if !has_jvm_system_property(jvm_args, key) {
+      jvm_args.push(format!("-D{}={}", key, value));
     }
   }
 }
@@ -377,17 +465,6 @@ fn resolve_host_addresses(host: &str) -> Vec<String> {
     }
   }
   values.into_iter().collect()
-}
-
-fn detect_java_version(java_cmd: &str) -> Option<String> {
-  let output = Command::new(java_cmd).arg("-version").output().ok()?;
-  let stderr = String::from_utf8_lossy(&output.stderr);
-  let stdout = String::from_utf8_lossy(&output.stdout);
-  let line = stderr
-    .lines()
-    .chain(stdout.lines())
-    .find(|line| !line.trim().is_empty())?;
-  Some(line.trim().to_string())
 }
 
 fn redact_sensitive_args(args: &[String]) -> Vec<String> {
@@ -925,62 +1002,4 @@ fn resolve_auth(
 fn offline_uuid(name: &str) -> String {
   let offline = format!("OfflinePlayer:{}", name);
   uuid::Uuid::new_v3(&uuid::Uuid::NAMESPACE_DNS, offline.as_bytes()).to_string()
-}
-
-fn resolve_java_command(config: &AppConfig, instance: &Instance) -> Result<String, String> {
-  let override_path = config
-    .settings
-    .java
-    .overrides
-    .iter()
-    .find(|item| item.instance_id == instance.id)
-    .and_then(|item| item.path.clone());
-
-  let path = override_path.or_else(|| config.settings.java.runtime.path.clone());
-  if let Some(path) = path {
-    let candidate = PathBuf::from(&path);
-    if candidate.is_dir() {
-      let bin_name = if cfg!(windows) { "java.exe" } else { "java" };
-      let bin = candidate.join("bin").join(bin_name);
-      if bin.exists() {
-        return Ok(bin.to_string_lossy().to_string());
-      }
-      return Err(format!(
-        "Java executable not found. Expected {} inside {}.",
-        bin.display(),
-        candidate.display()
-      ));
-    }
-    if candidate.exists() {
-      return Ok(candidate.to_string_lossy().to_string());
-    }
-    return Err(format!(
-      "Java executable not found at {}.",
-      candidate.display()
-    ));
-  }
-
-  let bin_name = if cfg!(windows) { "java.exe" } else { "java" };
-  if let Some(java_home) = env::var_os("JAVA_HOME") {
-    let candidate = PathBuf::from(java_home).join("bin").join(bin_name);
-    if candidate.exists() {
-      return Ok(candidate.to_string_lossy().to_string());
-    }
-  }
-  if let Some(found) = find_in_path(bin_name) {
-    return Ok(found.to_string_lossy().to_string());
-  }
-
-  Err("Java not found in PATH. Configure a Java path in Settings or set JAVA_HOME.".to_string())
-}
-
-fn find_in_path(bin_name: &str) -> Option<PathBuf> {
-  let path_var = env::var_os("PATH")?;
-  for path in env::split_paths(&path_var) {
-    let candidate = path.join(bin_name);
-    if candidate.exists() {
-      return Some(candidate);
-    }
-  }
-  None
 }

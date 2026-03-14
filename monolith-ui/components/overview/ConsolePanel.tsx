@@ -79,12 +79,14 @@ export default function ConsolePanel({
   metricHistory,
 }: ConsolePanelProps) {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const displayCpuLoadPct = cpuLoadPct !== null ? clampPercent(cpuLoadPct) : null;
+  const displayGpuLoadPct = gpuLoadPct !== null ? clampPercent(gpuLoadPct) : null;
   const ramSeries = metricHistory.map((sample) => {
     if (maxRamMb <= 0) return 0;
     return (sample.rss_mb / maxRamMb) * 100;
   });
-  const cpuSeries = metricHistory.map((sample) => sample.cpu_load_pct ?? 0);
-  const gpuSeries = metricHistory.map((sample) => sample.gpu_load_pct ?? 0);
+  const cpuSeries = metricHistory.map((sample) => clampPercent(sample.cpu_load_pct ?? 0));
+  const gpuSeries = metricHistory.map((sample) => clampPercent(sample.gpu_load_pct ?? 0));
 
   const ramPoints = buildPolylinePoints(ramSeries);
   const cpuPoints = buildPolylinePoints(cpuSeries);
@@ -143,20 +145,6 @@ export default function ConsolePanel({
           <SkipBack size={18} />
           Kill
         </Button>
-        <Button
-          onClick={onCopyLogs}
-          className="bg-secondary text-foreground hover:bg-secondary/80 gap-2 ml-auto"
-        >
-          <Copy size={18} />
-          Copy
-        </Button>
-        <Button
-          onClick={onClearLogs}
-          className="bg-destructive text-destructive-foreground hover:bg-destructive/90 gap-2"
-        >
-          <Trash2 size={18} />
-          Clear
-        </Button>
       </div>
       {!hasAccounts && (
         <p className="text-xs text-foreground/50">
@@ -166,10 +154,30 @@ export default function ConsolePanel({
 
       <div className="flex flex-1 min-h-0 flex-col gap-4">
         <div className="bg-card border border-border rounded-lg p-4 flex flex-col h-[430px]">
-          <div className="mb-3 flex items-center gap-2">
+          <div className="mb-3 flex items-center justify-between gap-3">
             <p className="text-xs font-bold uppercase tracking-widest text-foreground/70">
               Instance Log
             </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onCopyLogs}
+                className="inline-flex h-8 w-8 items-center justify-center rounded border border-border bg-secondary/20 text-foreground/60 transition hover:bg-secondary/40 hover:text-foreground"
+                aria-label="Copy instance log"
+                title="Copy instance log"
+              >
+                <Copy size={14} />
+              </button>
+              <button
+                type="button"
+                onClick={onClearLogs}
+                className="inline-flex h-8 w-8 items-center justify-center rounded border border-border bg-secondary/20 text-foreground/60 transition hover:bg-destructive/15 hover:text-destructive"
+                aria-label="Clear instance log"
+                title="Clear instance log"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
           </div>
           <div className="bg-input rounded-lg p-4 h-[370px] overflow-y-auto overflow-x-hidden border border-border">
             {consoleLogs.length === 0 ? (
@@ -199,11 +207,11 @@ export default function ConsolePanel({
               </span>
               <span className="inline-flex items-center gap-1.5">
                 <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "rgba(255,255,255,0.8)" }} />
-                CPU {cpuLoadPct !== null ? `${cpuLoadPct.toFixed(0)}%` : "—"}
+                CPU {displayCpuLoadPct !== null ? `${displayCpuLoadPct.toFixed(0)}%` : "—"}
               </span>
               <span className="inline-flex items-center gap-1.5">
                 <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "#f87171" }} />
-                GPU {gpuLoadPct !== null ? `${gpuLoadPct.toFixed(0)}%` : "—"}
+                GPU {displayGpuLoadPct !== null ? `${displayGpuLoadPct.toFixed(0)}%` : "—"}
               </span>
             </div>
             <div className="relative flex-1 w-full min-h-[120px]">
@@ -216,29 +224,26 @@ export default function ConsolePanel({
                     onMouseMove={handleGraphHover}
                     onMouseLeave={() => setHoverIndex(null)}
                   >
+                    <rect x="0" y="0" width="100" height="13.333" fill="rgba(255,255,255,0.025)" />
+                    <rect x="0" y="13.333" width="100" height="13.333" fill="rgba(255,255,255,0.015)" />
+                    <rect x="0" y="26.666" width="100" height="13.334" fill="rgba(255,255,255,0.025)" />
                     <line
                       x1="0"
                       x2="100"
-                      y1="0"
-                      y2="0"
+                      y1="13.333"
+                      y2="13.333"
                       stroke="rgba(255,255,255,0.08)"
                       strokeDasharray="2 4"
+                      vectorEffect="non-scaling-stroke"
                     />
                     <line
                       x1="0"
                       x2="100"
-                      y1="20"
-                      y2="20"
+                      y1="26.666"
+                      y2="26.666"
                       stroke="rgba(255,255,255,0.08)"
                       strokeDasharray="2 4"
-                    />
-                    <line
-                      x1="0"
-                      x2="100"
-                      y1="40"
-                      y2="40"
-                      stroke="rgba(255,255,255,0.08)"
-                      strokeDasharray="2 4"
+                      vectorEffect="non-scaling-stroke"
                     />
                     {ramPoints ? (
                       <polyline
@@ -322,9 +327,9 @@ export default function ConsolePanel({
                     >
                       <span className="mr-2">RAM {formatMemory(hoverSample.rss_mb)}</span>
                       <span className="mr-2">
-                        CPU {(hoverSample.cpu_load_pct ?? 0).toFixed(1)}%
+                        CPU {clampPercent(hoverSample.cpu_load_pct ?? 0).toFixed(1)}%
                       </span>
-                      <span>GPU {(hoverSample.gpu_load_pct ?? 0).toFixed(1)}%</span>
+                      <span>GPU {clampPercent(hoverSample.gpu_load_pct ?? 0).toFixed(1)}%</span>
                     </div>
                   ) : null}
                 </>

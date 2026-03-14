@@ -12,6 +12,7 @@ import React, {
 import { getInvoke, getListen, waitForTauri } from "@/lib/tauri";
 import type { AppConfig, ProgressEvent } from "@/lib/launcher-types";
 import { toast } from "@/hooks/use-toast";
+import { getStackGroupsByAxisId } from "recharts/types/util/ChartUtils";
 
 type UnlistenFn = () => void;
 
@@ -21,11 +22,15 @@ type LogsState = {
   instances: Record<string, string[]>;
 };
 
+type RefreshConfigOptions = {
+  silent?: boolean;
+};
+
 type LauncherContextValue = {
   ready: boolean;
   loading: boolean;
   config: AppConfig | null;
-  refreshConfig: () => Promise<void>;
+  refreshConfig: (options?: RefreshConfigOptions) => Promise<void>;
   saveConfig: (next: AppConfig) => Promise<void>;
   status: string | null;
   setStatus: (message: string, variant?: "info" | "error") => void;
@@ -69,6 +74,8 @@ export const LauncherProvider = ({
   const [installing, setInstalling] = useState(false);
   const [installDetails, setInstallDetails] = useState<string[]>([]);
   const entitlementCheckInFlight = useRef(false);
+  const saveInFlight = useRef(false);
+  const queuedConfig = useRef<AppConfig | null>(null);
 
   const appendLauncherLog = useCallback((message: string) => {
     if (!message) return;
@@ -148,41 +155,69 @@ export const LauncherProvider = ({
     [appendLauncherLog],
   );
 
-  const refreshConfig = useCallback(async () => {
-    const invoker = getInvoke();
-    if (!invoker) {
-      setConfig(null);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    try {
-      const nextConfig = (await invoker("load_config")) as AppConfig;
-      setConfig(nextConfig);
-    } catch (err: any) {
-      const message = err?.toString?.() || "Failed to load config.";
-      setStatus(message, "error");
-    } finally {
-      setLoading(false);
-    }
-  }, [setStatus]);
-
-  const saveConfig = useCallback(
-    async (next: AppConfig) => {
+  const refreshConfig = useCallback(
+    async (options?: RefreshConfigOptions) => {
+      const silent = options?.silent ?? false;
       const invoker = getInvoke();
       if (!invoker) {
-        setStatus("Tauri backend not available.", "error");
+        setConfig(null);
+        if (!silent) {
+          setLoading(false);
+        }
         return;
       }
+      if (!silent) {
+        setLoading(true);
+      }
+      try {
+        const nextConfig = (await invoker("load_config")) as AppConfig;
+        setConfig(nextConfig);
+      } catch (err: any) {
+        const message = err?.toString?.() || "Failed to load config.";
+        setStatus(message, "error");
+      } finally {
+        if (!silent) {
+          setLoading(false);
+        }
+      }
+    },
+    [setStatus],
+  );
+
+  const flushQueuedSave = useCallback(async () => {
+    if (saveInFlight.current) return;
+    const invoker = getInvoke();
+    if (!invoker) {
+      setStatus("Tauri backend not available.", "error");
+      return;
+    }
+    saveInFlight.current = true;
+    let hadError = false;
+    while (queuedConfig.current) {
+      const next = queuedConfig.current;
+      queuedConfig.current = null;
       try {
         await invoker("save_config", { config: next });
-        await refreshConfig();
       } catch (err: any) {
         const message = err?.toString?.() || "Failed to save config.";
         setStatus(message, "error");
+        hadError = true;
+        break;
       }
+    }
+    saveInFlight.current = false;
+    if (hadError) {
+      await refreshConfig({ silent: true });
+    }
+  }, [refreshConfig, setStatus]);
+
+  const saveConfig = useCallback(
+    async (next: AppConfig) => {
+      setConfig(next);
+      queuedConfig.current = next;
+      void flushQueuedSave();
     },
-    [refreshConfig, setStatus],
+    [flushQueuedSave],
   );
 
   useEffect(() => {
@@ -313,11 +348,12 @@ export const LauncherProvider = ({
       unlistenLaunchStarted = unlisten;
     });
 
-    listen("launch:error", () => {
+    listen("launch:error", (event: any) => {
       setInstalling(false);
       setInstallProgress(null);
       setInstallDetails([]);
-      setStatus("Launch failed. Check logs.", "error");
+      const message = event?.payload || "Launch failed. Check logs.";
+      setStatus(message, "error");
     }).then((unlisten: UnlistenFn) => {
       unlistenLaunchError = unlisten;
     });

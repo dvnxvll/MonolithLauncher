@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
-import { Check, Globe, Plus, X, FolderOpen } from "lucide-react";
+import { Check, Globe, Plus, X, FolderOpen, Activity } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { ServerEntry } from "@/lib/launcher-types";
+import type { ServerEntry, ServerLatencyReport } from "@/lib/launcher-types";
 
 interface ServerTableProps {
   breadcrumbs: ReactNode;
@@ -20,6 +20,10 @@ interface ServerTableProps {
   resolveImageData: (icon?: string | null) => string | null;
   query: string;
   onQueryChange: (value: string) => void;
+  diagnosticsEnabled: boolean;
+  probingAddress: string | null;
+  latencyByAddress: Record<string, ServerLatencyReport>;
+  onProbe: (server: ServerEntry) => void;
 }
 
 export default function ServerTable({
@@ -39,6 +43,10 @@ export default function ServerTable({
   resolveImageData,
   query,
   onQueryChange,
+  diagnosticsEnabled,
+  probingAddress,
+  latencyByAddress,
+  onProbe,
 }: ServerTableProps) {
   const filteredServers = query.trim()
     ? servers.filter((server) => {
@@ -78,6 +86,11 @@ export default function ServerTable({
           <FolderOpen size={18} />
         </Button>
       </div>
+      {!diagnosticsEnabled ? (
+        <p className="text-xs text-foreground/55">
+          Network diagnostics is disabled in Settings. Enable it to run latency probes.
+        </p>
+      ) : null}
 
       <div className="bg-card border border-border rounded-lg overflow-hidden">
         <table className="w-full">
@@ -209,10 +222,41 @@ export default function ServerTable({
                       </div>
                     </td>
                     <td className="p-4 text-sm font-mono text-foreground/70">
-                      {server.ip}
+                      <div className="space-y-1">
+                        <p>{server.ip}</p>
+                        {latencyByAddress[server.ip.toLowerCase().trim()] ? (
+                          <p className="text-[11px] text-foreground/55">
+                            {latencyByAddress[server.ip.toLowerCase().trim()].median_ms !== null &&
+                            latencyByAddress[server.ip.toLowerCase().trim()].median_ms !==
+                              undefined
+                              ? `${Math.round(latencyByAddress[server.ip.toLowerCase().trim()].median_ms ?? 0)}ms median`
+                              : "No response"}
+                            {" • "}
+                            {latencyByAddress[server.ip.toLowerCase().trim()].loss_pct.toFixed(0)}%
+                            {" loss"}
+                          </p>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="p-4">
                       <div className="flex items-center justify-end gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="bg-transparent"
+                          onClick={() => onProbe(server)}
+                          disabled={
+                            !diagnosticsEnabled ||
+                            probingAddress === server.ip.toLowerCase().trim() ||
+                            saving ||
+                            editingIndex !== null
+                          }
+                        >
+                          <Activity size={14} />
+                          {probingAddress === server.ip.toLowerCase().trim()
+                            ? "Pinging..."
+                            : "Ping"}
+                        </Button>
                         <Button
                           size="sm"
                           className="bg-secondary text-foreground hover:bg-secondary/80"

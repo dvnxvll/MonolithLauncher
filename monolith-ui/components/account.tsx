@@ -1,7 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Play, Trash2, User as UserIcon } from "lucide-react";
+import {
+  BadgeCheck,
+  Clock3,
+  KeyRound,
+  Play,
+  ShieldCheck,
+  Trash2,
+  User as UserIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import AddAccountDialog from "./dialogs/add-account-dialog";
 import { useLauncher } from "./launcher-provider";
@@ -9,14 +17,19 @@ import { invoke } from "@/lib/tauri";
 import { slugify } from "@/lib/launcher-utils";
 import type { Account } from "@/lib/launcher-types";
 
+const formatTimestamp = (value?: string | null) => {
+  if (!value) return "No recent activity";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+};
+
 export default function Account() {
   const { config, saveConfig, setStatus } = useLauncher();
   const accounts = config?.accounts ?? [];
   const activeAccountId = config?.active_account_id ?? null;
   const [showDialog, setShowDialog] = useState(false);
-  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(
-    null,
-  );
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteConfirmName, setDeleteConfirmName] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null);
@@ -26,12 +39,8 @@ export default function Account() {
       setSelectedAccountId(null);
       return;
     }
-    if (
-      !selectedAccountId ||
-      !accounts.some((acc) => acc.id === selectedAccountId)
-    ) {
-      const fallback =
-        accounts.find((acc) => acc.id === activeAccountId) || accounts[0];
+    if (!selectedAccountId || !accounts.some((acc) => acc.id === selectedAccountId)) {
+      const fallback = accounts.find((acc) => acc.id === activeAccountId) || accounts[0];
       setSelectedAccountId(fallback?.id ?? null);
     }
   }, [accounts, activeAccountId, selectedAccountId]);
@@ -52,9 +61,7 @@ export default function Account() {
     if (!config) return;
     const remaining = (config.accounts || []).filter((acc) => acc.id !== id);
     const nextActive =
-      config.active_account_id === id
-        ? (remaining[0]?.id ?? null)
-        : config.active_account_id;
+      config.active_account_id === id ? (remaining[0]?.id ?? null) : config.active_account_id;
     const next = {
       ...config,
       accounts: remaining,
@@ -83,14 +90,9 @@ export default function Account() {
       setStatus("Enter a display name.", "error");
       return;
     }
-    const hasMicrosoft = config.accounts.some(
-      (account) => account.kind === "microsoft",
-    );
+    const hasMicrosoft = config.accounts.some((account) => account.kind === "microsoft");
     if (!hasMicrosoft) {
-      setStatus(
-        "Add a Microsoft account before creating offline profiles.",
-        "error",
-      );
+      setStatus("Add a Microsoft account before creating offline profiles.", "error");
       return;
     }
     const base = slugify(trimmed);
@@ -124,21 +126,16 @@ export default function Account() {
       return;
     }
     try {
-      const authorizeUrl = await invoke<string>("start_microsoft_login", {
-        clientId,
-      });
+      const authorizeUrl = await invoke<string>("start_microsoft_login", { clientId });
       await invoke("open_external", { url: authorizeUrl });
       setStatus("Opening Microsoft sign-in in your browser.");
     } catch (err: any) {
-      const message =
-        err?.toString?.() || "Unable to open browser for sign-in.";
+      const message = err?.toString?.() || "Unable to open browser for sign-in.";
       setStatus(message, "error");
     }
   };
 
-  const hasMicrosoftAccount = accounts.some(
-    (account) => account.kind === "microsoft",
-  );
+  const hasMicrosoftAccount = accounts.some((account) => account.kind === "microsoft");
 
   const MicrosoftIcon = ({
     size = 16,
@@ -162,227 +159,257 @@ export default function Account() {
     </svg>
   );
 
-  const renderOwnershipBadge = (account: Account) => {
+  const renderOwnershipBadge = (account: Account, variant: "badge" | "chip" = "badge") => {
     if (account.kind !== "microsoft") return null;
-    let label = "UNKNOWN";
-    let className = "bg-muted/40 text-muted-foreground border border-border/60";
+    let label = "CHECK PENDING";
+    let className = "border border-border/60 bg-muted/40 text-muted-foreground";
     if (account.owns_minecraft === true) {
       label = "OWNED";
-      className =
-        "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30";
+      className = "border border-emerald-500/30 bg-emerald-500/15 text-emerald-300";
     } else if (account.owns_minecraft === false) {
       label = "NO LICENSE";
-      className =
-        "bg-destructive/15 text-destructive border border-destructive/30";
+      className = "border border-destructive/30 bg-destructive/15 text-destructive";
     }
+
+    const sizeClass =
+      variant === "chip"
+        ? "min-h-6 rounded-lg px-3 py-2 text-xs font-medium leading-none"
+        : "rounded px-2 py-1 text-[12px] font-bold leading-none";
+
     return (
-      <span
-        className={`px-2 py-0.5 text-[10px] font-bold uppercase rounded ${className}`}
-      >
+      <span className={`inline-flex items-center uppercase ${sizeClass} ${className}`}>
         {label}
       </span>
     );
   };
 
+  const accountStateLabel = (account: Account) => {
+    if (account.kind === "offline") return "Offline profile";
+    if (account.owns_minecraft === true) return "Licensed profile";
+    if (account.owns_minecraft === false) return "Unlicensed profile";
+    return "Microsoft profile";
+  };
+
+  const profileStats = selectedAccount
+    ? [
+        {
+          label: "Account Type",
+          value: selectedAccount.kind === "microsoft" ? "Microsoft" : "Offline",
+          icon: BadgeCheck,
+        },
+        {
+          label: "Last Used",
+          value: formatTimestamp(selectedAccount.last_used),
+          icon: Clock3,
+        },
+        {
+          label: "Profile ID",
+          value: selectedAccount.uuid || "Unavailable",
+          icon: KeyRound,
+        },
+      ]
+    : [];
+
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <div className="sticky top-0 z-20 h-28 flex items-center border-b border-border px-8 bg-background">
-        <div className="flex items-center justify-between w-full">
+      <div className="sticky top-0 z-20 border-b border-border bg-background px-4 py-4 md:px-6 xl:px-8">
+        <div className="flex min-h-[79px] flex-col justify-center gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-4xl font-bold">Accounts</h2>
-            <p className="text-foreground/60 text-sm mt-1">
-              Manage your Minecraft profiles
+            <h2 className="text-3xl font-bold md:text-4xl">Accounts</h2>
+            <p className="mt-1 text-sm text-foreground/60">
+              Manage Minecraft identities, active profile selection, and account health.
             </p>
           </div>
           <Button
             onClick={() => setShowDialog(true)}
             data-tip-id="account-add-account"
-            className="bg-primary text-primary-foreground hover:bg-primary/90 gap-2 h-11"
+            className="h-11 bg-primary text-primary-foreground hover:bg-primary/90"
           >
             Add Account
           </Button>
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-hidden flex">
-        <div className="w-80 min-h-0 border-r border-border overflow-y-auto bg-card/30">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden xl:flex-row">
+        <div className="w-full border-b border-border bg-card/30 xl:w-80 xl:border-b-0 xl:border-r">
           {accounts.length === 0 ? (
-            <div className="p-8 flex flex-col items-center justify-center h-full">
-              <p className="text-foreground/60 text-center mb-6">
+            <div className="flex h-full min-h-[240px] flex-col items-center justify-center p-8">
+              <p className="mb-6 text-center text-foreground/60">
                 No accounts yet. Add one to get started.
               </p>
               <Button
                 onClick={() => setShowDialog(true)}
-                className="bg-primary text-primary-foreground hover:bg-primary/90 gap-2"
+                className="bg-primary text-primary-foreground hover:bg-primary/90"
               >
-                Add
+                Add Account
               </Button>
             </div>
           ) : (
-            <div className="p-4 space-y-2">
-              {accounts.map((account) => (
-                <button
-                  key={account.id}
-                  onClick={() => setSelectedAccountId(account.id)}
-                  className={`w-full text-left p-4 rounded-lg border transition-all ${
-                    selectedAccountId === account.id
-                      ? "bg-accent/20 border-accent"
-                      : "border-border bg-card/50 hover:border-border/80"
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 bg-secondary/40 rounded flex items-center justify-center flex-shrink-0">
-                      {account.kind === "microsoft" ? (
-                        <MicrosoftIcon size={16} className="text-accent" />
-                      ) : (
-                        <UserIcon size={16} className="text-foreground/70" />
-                      )}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-bold text-sm truncate">
-                          {account.display_name}
-                        </h3>
-                        {account.id === activeAccountId && (
-                          <span className="px-2 py-0.5 bg-accent/20 text-accent text-xs font-bold rounded">
-                            ACTIVE
-                          </span>
+            <div className="max-h-[260px] overflow-y-auto p-3 sm:p-4 xl:max-h-none xl:min-h-0">
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+                {accounts.map((account) => (
+                  <button
+                    key={account.id}
+                    onClick={() => setSelectedAccountId(account.id)}
+                    className={`w-full rounded-xl border p-4 text-left transition-all ${
+                      selectedAccountId === account.id
+                        ? "border-accent bg-accent/18"
+                        : "border-border bg-card/50 hover:border-border/80"
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-secondary/40">
+                        {account.kind === "microsoft" ? (
+                          <MicrosoftIcon size={18} className="text-accent" />
+                        ) : (
+                          <UserIcon size={18} className="text-foreground/70" />
                         )}
-                        {renderOwnershipBadge(account)}
                       </div>
-                      <p className="text-xs text-foreground/60">
-                        {account.kind === "microsoft" ? "Microsoft" : "Offline"}
-                      </p>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="truncate text-sm font-bold">{account.display_name}</h3>
+                          {account.id === activeAccountId ? (
+                            <span className="rounded bg-accent/20 px-2 py-0.5 text-[10px] font-bold uppercase text-accent">
+                              Active
+                            </span>
+                          ) : null}
+                          {renderOwnershipBadge(account, "badge")}
+                        </div>
+                        <p className="mt-1 text-xs text-foreground/60">
+                          {accountStateLabel(account)}
+                        </p>
+                        <p className="mt-2 text-[11px] text-foreground/45">
+                          {formatTimestamp(account.last_used)}
+                        </p>
+                      </div>
                     </div>
-                    {account.id !== activeAccountId && (
-                      <div className="flex items-center gap-1 flex-shrink-0">
-                        <button
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            handleSetActive(account.id);
-                          }}
-                          className="p-2 hover:bg-background rounded transition-colors"
-                          aria-label={`Set ${account.display_name} active`}
-                        >
-                          <Play size={16} className="text-accent fill-accent" />
-                        </button>
-                        <button
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            openDeleteModal(account);
-                          }}
-                          className="p-2 hover:bg-background rounded transition-colors"
-                          aria-label={`Remove ${account.display_name}`}
-                        >
-                          <Trash2 size={16} className="text-destructive" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </button>
-              ))}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
         </div>
 
         {selectedAccount ? (
-          <div className="flex-1 min-h-0 overflow-y-auto flex flex-col items-center">
-            <div className="w-full max-w-3xl p-8">
-              <div className="mb-8">
-                <div className="flex items-start gap-6 mb-8">
-                  <div className="w-24 h-24 bg-secondary/30 rounded-xl flex items-center justify-center flex-shrink-0">
-                    {selectedAccount.kind === "microsoft" ? (
-                      <MicrosoftIcon size={48} className="text-accent" />
-                    ) : (
-                      <UserIcon size={48} className="text-foreground/70" />
-                    )}
-                  </div>
-                  <div className="flex-1">
-                    <h1 className="text-5xl font-bold mb-2">
-                      {selectedAccount.display_name}
-                    </h1>
-                    <div className="flex items-center gap-2 mb-4">
-                      <div className="px-3 py-1 bg-secondary/40 rounded-lg">
-                        <p className="text-sm font-mono">
-                          {selectedAccount.kind === "microsoft"
-                            ? "Microsoft Account"
-                            : "Offline Account"}
-                        </p>
-                      </div>
-                      {renderOwnershipBadge(selectedAccount)}
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="mx-auto w-full max-w-6xl space-y-6 p-4 md:p-6 xl:p-8">
+              <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+                <div className="rounded-2xl border border-border bg-card p-6">
+                  <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
+                    <div className="flex h-20 w-20 flex-shrink-0 items-center justify-center rounded-2xl bg-secondary/30">
+                      {selectedAccount.kind === "microsoft" ? (
+                        <MicrosoftIcon size={40} className="text-accent" />
+                      ) : (
+                        <UserIcon size={40} className="text-foreground/70" />
+                      )}
                     </div>
-                    <p className="text-foreground/60 text-sm">
-                      {selectedAccount.owns_minecraft === true
-                        ? "Minecraft owned"
-                        : selectedAccount.owns_minecraft === false
-                          ? "Minecraft not owned"
-                          : "Ownership unknown"}
-                    </p>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h1 className="text-3xl font-bold md:text-4xl">
+                          {selectedAccount.display_name}
+                        </h1>
+                        {selectedAccount.id === activeAccountId ? (
+                          <span className="rounded-full border border-accent/40 bg-accent/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-widest text-accent">
+                            Selected Profile
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="mt-2 max-w-2xl text-sm text-foreground/60">
+                        {accountStateLabel(selectedAccount)}
+                      </p>
+                      <div className="mt-4 flex flex-wrap items-center gap-2">
+                        {renderOwnershipBadge(selectedAccount, "chip")}
+                        <div className="inline-flex items-center rounded-lg border border-border bg-secondary/20 px-3 py-2 text-xs leading-none text-foreground/70">
+                          {selectedAccount.kind === "microsoft" ? "Microsoft identity" : "Offline identity"}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-border bg-card p-6">
+                  <p className="text-[10px] uppercase tracking-[0.28em] text-foreground/45">
+                    Actions
+                  </p>
+                  <div className="mt-4 space-y-3">
+                    <Button
+                      onClick={() => handleSetActive(selectedAccount.id)}
+                      disabled={selectedAccount.id === activeAccountId}
+                      className="w-full gap-2 bg-accent text-accent-foreground hover:bg-accent/90"
+                    >
+                      <Play size={16} />
+                      {selectedAccount.id === activeAccountId ? "Currently Active" : "Set Active"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => openDeleteModal(selectedAccount)}
+                      className="w-full border-destructive/30 bg-transparent text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    >
+                      <Trash2 size={16} />
+                      Remove Account
+                    </Button>
                   </div>
                 </div>
               </div>
 
-              <div className="space-y-6">
-                <div className="bg-card border border-border rounded-xl p-6">
-                  <h3 className="text-lg font-bold mb-6 tracking-tight">
-                    Account Information
-                  </h3>
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-xs text-foreground/60 uppercase tracking-widest mb-2">
-                        Username
-                      </label>
-                      <input
-                        type="text"
-                        value={selectedAccount.display_name}
-                        readOnly
-                        className="w-full bg-input border border-border rounded-lg px-4 py-3 font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-foreground/60 uppercase tracking-widest mb-2">
-                        Account Type
-                      </label>
-                      <div className="flex gap-3">
-                        <div className="flex-1 bg-input border border-border rounded-lg px-4 py-3">
-                          <p className="font-mono text-sm">
-                            {selectedAccount.kind === "microsoft"
-                              ? "Microsoft Account"
-                              : "Offline"}
-                          </p>
-                        </div>
-                        <div className="px-4 py-3 bg-secondary/30 rounded-lg flex items-center gap-2">
-                          <span className="text-xs font-mono">
-                            {selectedAccount.kind === "microsoft"
-                              ? "Microsoft Account"
-                              : "Offline Account"}
-                          </span>
-                        </div>
+              <div className="grid gap-4 lg:grid-cols-3">
+                {profileStats.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <div key={item.label} className="rounded-xl border border-border bg-card p-5">
+                      <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.24em] text-foreground/45">
+                        <Icon size={14} />
+                        {item.label}
                       </div>
+                      <p className="mt-4 break-all font-mono text-sm text-foreground/80">
+                        {item.value}
+                      </p>
                     </div>
-                  </div>
-                </div>
+                  );
+                })}
+              </div>
 
-                <div className="bg-card border border-border rounded-xl p-6">
-                  <h3 className="text-lg font-bold mb-6 tracking-tight">
-                    Actions
-                  </h3>
-                  <Button
-                    onClick={() => openDeleteModal(selectedAccount)}
-                    variant="destructive"
-                    className="w-full"
-                  >
-                    Remove Account
-                  </Button>
+              <div className="rounded-2xl border border-border bg-card p-6">
+                <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.28em] text-foreground/45">
+                  <ShieldCheck size={14} />
+                  User Profile
+                </div>
+                <div className="mt-5 grid gap-4 sm:grid-cols-2">
+                  <div className="rounded-xl border border-border bg-secondary/20 p-4">
+                    <p className="text-xs uppercase tracking-[0.22em] text-foreground/45">
+                      Display Name
+                    </p>
+                    <p className="mt-3 text-lg font-semibold text-foreground">
+                      {selectedAccount.display_name}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-border bg-secondary/20 p-4">
+                    <p className="text-xs uppercase tracking-[0.22em] text-foreground/45">
+                      Entitlement State
+                    </p>
+                    <p className="mt-3 text-lg font-semibold text-foreground">
+                      {selectedAccount.owns_minecraft === true
+                        ? "Owned"
+                        : selectedAccount.owns_minecraft === false
+                          ? "No license"
+                          : "Pending"}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-border bg-secondary/20 p-4 sm:col-span-2">
+                    <p className="text-xs uppercase tracking-[0.22em] text-foreground/45">
+                      Internal Account ID
+                    </p>
+                    <p className="mt-3 break-all font-mono text-sm text-foreground/70">
+                      {selectedAccount.id}
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
         ) : (
-          <div className="flex-1 flex items-center justify-center">
-            <p className="text-foreground/40">
-              Select an account to view details
-            </p>
+          <div className="flex flex-1 items-center justify-center px-6 text-center">
+            <p className="text-foreground/40">Select an account to view details.</p>
           </div>
         )}
       </div>
@@ -395,40 +422,29 @@ export default function Account() {
         canAddOffline={hasMicrosoftAccount}
       />
 
-      {showDeleteModal && deleteTarget && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-card border border-border rounded-lg shadow-xl w-full max-w-md">
-            <div className="flex items-center justify-between p-6 border-b border-border">
+      {showDeleteModal && deleteTarget ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-lg border border-border bg-card shadow-xl">
+            <div className="flex items-center justify-between border-b border-border p-6">
               <h2 className="text-xl font-bold">Confirm Delete</h2>
-              <button
-                onClick={closeDeleteModal}
-                className="p-1 hover:bg-muted rounded transition-colors"
-              >
+              <button onClick={closeDeleteModal} className="rounded p-1 transition-colors hover:bg-muted">
                 ✕
               </button>
             </div>
-            <div className="p-6 space-y-4">
+            <div className="space-y-4 p-6">
               <p className="text-sm text-foreground/70">
-                Type '
-                <span className="font-semibold">
-                  {deleteTarget.display_name}
-                </span>
-                ' to confirm deletion.
+                Type <span className="font-semibold">{deleteTarget.display_name}</span> to confirm deletion.
               </p>
               <input
                 type="text"
                 value={deleteConfirmName}
                 onChange={(event) => setDeleteConfirmName(event.target.value)}
                 placeholder={deleteTarget.display_name}
-                className="w-full bg-input border border-border rounded-lg px-4 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-destructive font-mono"
+                className="w-full rounded-lg border border-border bg-input px-4 py-2 font-mono text-foreground focus:outline-none focus:ring-2 focus:ring-destructive"
               />
             </div>
-            <div className="flex gap-3 p-6 border-t border-border">
-              <Button
-                variant="outline"
-                onClick={closeDeleteModal}
-                className="flex-1 bg-transparent"
-              >
+            <div className="flex gap-3 border-t border-border p-6">
+              <Button variant="outline" onClick={closeDeleteModal} className="flex-1 bg-transparent">
                 Cancel
               </Button>
               <Button
@@ -436,9 +452,7 @@ export default function Account() {
                   await handleRemoveAccount(deleteTarget.id);
                   closeDeleteModal();
                 }}
-                disabled={
-                  deleteConfirmName.trim() !== deleteTarget.display_name
-                }
+                disabled={deleteConfirmName.trim() !== deleteTarget.display_name}
                 className="flex-1 bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:opacity-60"
               >
                 Delete
@@ -446,7 +460,7 @@ export default function Account() {
             </div>
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

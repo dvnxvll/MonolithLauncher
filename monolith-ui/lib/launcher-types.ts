@@ -69,12 +69,21 @@ export interface JavaSettings {
   runtimes: JavaRuntimeEntry[];
 }
 
+export type DiscordPresenceMode = "dynamic_minecraft" | "dynamic_monolith";
+
 export interface Settings {
   reference_instance_id?: string | null;
   pack_sync: PackSync;
   apply_to_new_instances: boolean;
   java: JavaSettings;
   theme: string;
+  discord_presence: boolean;
+  discord_presence_mode: DiscordPresenceMode;
+  network_diagnostics: boolean;
+  smart_network_optimization: boolean;
+  performance_gamemode: boolean;
+  performance_mangohud: boolean;
+  performance_zink: boolean;
   microsoft_client_id: string;
   skipped_release_tag?: string | null;
 }
@@ -133,6 +142,19 @@ export interface ServerEntry {
   icon?: string | null;
 }
 
+export interface ServerLatencyReport {
+  address: string;
+  host: string;
+  port: number;
+  probes: number;
+  success_count: number;
+  failure_count: number;
+  loss_pct: number;
+  median_ms?: number | null;
+  average_ms?: number | null;
+  jitter_ms?: number | null;
+}
+
 export interface WorldEntry {
   id: string;
   name: string;
@@ -151,6 +173,16 @@ export interface ModrinthProjectHit {
   icon_url?: string | null;
 }
 
+export interface ModrinthDependencyPlanItem {
+  project_id: string;
+  title: string;
+  project_type: string;
+}
+
+export interface ModrinthDependencyPlan {
+  dependencies: ModrinthDependencyPlanItem[];
+}
+
 export interface InstanceMetrics {
   rss_mb: number;
   cpu_load_pct: number;
@@ -163,4 +195,57 @@ export interface ProgressEvent {
   current: number;
   total?: number | null;
   detail?: string | null;
+}
+
+export interface ResolvedJavaRuntime {
+  path: string;
+  version?: string | null;
+  major?: number | null;
+  source: string;
+  label: string;
+}
+
+export interface InstanceCheck {
+  id: string;
+  label: string;
+  status: "ok" | "warn" | "error" | "info";
+  summary: string;
+  detail?: string | null;
+}
+
+export interface InstanceDiagnostic {
+  code: string;
+  severity: "error" | "warn" | "info";
+  title: string;
+  summary: string;
+  suggested_fix?: string | null;
+}
+
+export interface InstanceSnapshot {
+  id: string;
+  created_at_unix: number;
+  reason?: string | null;
+  file_count: number;
+}
+
+export interface RepairResult {
+  snapshot?: InstanceSnapshot | null;
+  cleared_targets: string[];
+  summary: string;
+}
+
+export interface JavaCompatibility {
+  recommended_major: number;
+  selected?: ResolvedJavaRuntime | null;
+  compatible: boolean;
+}
+
+export interface InstancePreflightReport {
+  ready: boolean;
+  checks: InstanceCheck[];
+  diagnostics: InstanceDiagnostic[];
+  java: JavaCompatibility;
+  repair_targets: string[];
+  snapshot_count: number;
+  latest_log_excerpt?: string | null;
 }

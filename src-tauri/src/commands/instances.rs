@@ -4,6 +4,11 @@ use std::sync::Mutex;
 
 use crate::commands::system::open_target;
 use crate::config::{self, ConfigStore, Instance, InstanceManifest, INSTANCE_CONFIG_FILE};
+use crate::diagnostics::{
+  build_instance_preflight, create_snapshot, delete_snapshot, list_instance_snapshots as load_snapshots,
+  repair_instance as repair_instance_files, restore_snapshot,
+};
+use crate::java::detect_java_version;
 use crate::resolve_instance_dir;
 
 fn load_manifest(path: &PathBuf) -> Result<InstanceManifest, String> {
@@ -127,6 +132,62 @@ pub(crate) fn remove_instance(
 pub(crate) fn repair_instance(
   instance_id: String,
   state: tauri::State<'_, Mutex<ConfigStore>>,
+) -> Result<crate::diagnostics::RepairResult, String> {
+  let store = state.lock().map_err(|_| "config store lock poisoned".to_string())?;
+  let config = store.get();
+  let instance = config
+    .instances
+    .iter()
+    .find(|item| item.id == instance_id)
+    .ok_or_else(|| "instance not found".to_string())?;
+  repair_instance_files(instance)
+}
+
+#[tauri::command]
+pub(crate) fn get_instance_preflight(
+  instance_id: String,
+  state: tauri::State<'_, Mutex<ConfigStore>>,
+) -> Result<crate::diagnostics::InstancePreflightReport, String> {
+  let store = state.lock().map_err(|_| "config store lock poisoned".to_string())?;
+  let config = store.get();
+  let instance = config
+    .instances
+    .iter()
+    .find(|item| item.id == instance_id)
+    .ok_or_else(|| "instance not found".to_string())?;
+  Ok(build_instance_preflight(&config, instance))
+}
+
+#[tauri::command]
+pub(crate) fn list_instance_snapshots(
+  instance_id: String,
+  state: tauri::State<'_, Mutex<ConfigStore>>,
+) -> Result<Vec<crate::diagnostics::InstanceSnapshot>, String> {
+  let instance_dir = resolve_instance_dir(&instance_id, &state)?;
+  load_snapshots(&instance_dir)
+}
+
+#[tauri::command]
+pub(crate) fn create_instance_snapshot(
+  instance_id: String,
+  reason: Option<String>,
+  state: tauri::State<'_, Mutex<ConfigStore>>,
+) -> Result<crate::diagnostics::InstanceSnapshot, String> {
+  let store = state.lock().map_err(|_| "config store lock poisoned".to_string())?;
+  let config = store.get();
+  let instance = config
+    .instances
+    .iter()
+    .find(|item| item.id == instance_id)
+    .ok_or_else(|| "instance not found".to_string())?;
+  create_snapshot(instance, reason)
+}
+
+#[tauri::command]
+pub(crate) fn restore_instance_snapshot(
+  instance_id: String,
+  snapshot_id: String,
+  state: tauri::State<'_, Mutex<ConfigStore>>,
 ) -> Result<(), String> {
   let store = state.lock().map_err(|_| "config store lock poisoned".to_string())?;
   let config = store.get();
@@ -135,26 +196,61 @@ pub(crate) fn repair_instance(
     .iter()
     .find(|item| item.id == instance_id)
     .ok_or_else(|| "instance not found".to_string())?;
-  let manifest_path = PathBuf::from(&instance.directory).join(INSTANCE_CONFIG_FILE);
-  if !manifest_path.exists() {
-    return Err("instance manifest missing".to_string());
+  restore_snapshot(instance, &snapshot_id)
+}
+
+#[tauri::command]
+pub(crate) fn delete_instance_snapshot(
+  instance_id: String,
+  snapshot_id: String,
+  state: tauri::State<'_, Mutex<ConfigStore>>,
+) -> Result<(), String> {
+  let store = state.lock().map_err(|_| "config store lock poisoned".to_string())?;
+  let config = store.get();
+  let instance = config
+    .instances
+    .iter()
+    .find(|item| item.id == instance_id)
+    .ok_or_else(|| "instance not found".to_string())?;
+  delete_snapshot(instance, &snapshot_id)
+}
+
+#[tauri::command]
+pub(crate) fn set_instance_java_override(
+  instance_id: String,
+  java_path: Option<String>,
+  state: tauri::State<'_, Mutex<ConfigStore>>,
+) -> Result<(), String> {
+  let mut store = state.lock().map_err(|_| "config store lock poisoned".to_string())?;
+  let mut config = store.get();
+  if !config.instances.iter().any(|item| item.id == instance_id) {
+    return Err("instance not found".to_string());
   }
-  let mut manifest = load_manifest(&manifest_path)?;
-  manifest.installed_version = None;
-  manifest.installed_loader = None;
-  manifest.installed_loader_version = None;
-  save_manifest(&manifest_path, &manifest)?;
-  let legacy_install = PathBuf::from(&instance.directory).join("install.json");
-  let _ = fs::remove_file(legacy_install);
-  let versions_dir = PathBuf::from(&instance.directory).join("versions");
-  let libraries_dir = PathBuf::from(&instance.directory).join("libraries");
-  let natives_dir = PathBuf::from(&instance.directory).join("natives");
-  let installers_dir = PathBuf::from(&instance.directory).join("installers");
-  let _ = fs::remove_dir_all(versions_dir);
-  let _ = fs::remove_dir_all(libraries_dir);
-  let _ = fs::remove_dir_all(natives_dir);
-  let _ = fs::remove_dir_all(installers_dir);
-  Ok(())
+  config
+    .settings
+    .java
+    .overrides
+    .retain(|item| item.instance_id != instance_id);
+
+  let next_path = java_path.and_then(|value| {
+    let trimmed = value.trim().to_string();
+    if trimmed.is_empty() {
+      None
+    } else {
+      Some(trimmed)
+    }
+  });
+
+  if let Some(path) = next_path {
+    let version = detect_java_version(&path);
+    config.settings.java.overrides.push(config::JavaOverride {
+      instance_id,
+      version,
+      path: Some(path),
+    });
+  }
+
+  store.set(config).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -260,12 +356,12 @@ pub(crate) fn update_instance_loader_version(
       Some(trimmed.to_string())
     }
   });
+
   if normalized.is_none() {
     return Err("loader version is required".to_string());
   }
 
   manifest.loader_version = normalized;
-  manifest.installed_version = None;
   manifest.installed_loader = None;
   manifest.installed_loader_version = None;
   save_manifest(&manifest_path, &manifest)

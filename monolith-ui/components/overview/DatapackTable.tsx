@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { FolderOpen } from "lucide-react";
+import { FolderOpen, Trash2 } from "lucide-react";
 import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,6 +20,7 @@ interface DatapackTableProps {
   onOpen: () => void;
   items: PackEntry[];
   onToggle: (entry: PackEntry) => void;
+  onDelete: (entry: PackEntry) => void;
   query: string;
   onQueryChange: (value: string) => void;
 }
@@ -33,6 +34,7 @@ export default function DatapackTable({
   onOpen,
   items,
   onToggle,
+  onDelete,
   query,
   onQueryChange,
 }: DatapackTableProps) {
@@ -102,7 +104,7 @@ export default function DatapackTable({
             <tr className="border-b border-border bg-secondary/20">
               <th className="text-left p-4 font-semibold text-sm">Name</th>
               <th className="text-left p-4 font-semibold text-sm">Version</th>
-              <th className="text-left p-4 font-semibold text-sm">Enabled</th>
+              <th className="text-left p-4 font-semibold text-sm">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -123,18 +125,32 @@ export default function DatapackTable({
                     {item.version || "—"}
                   </td>
                   <td className="p-4">
-                    <button
-                      onClick={() => onToggle(item)}
-                      className={`relative w-10 h-6 rounded-full transition-all ${
-                        item.enabled ? "bg-emerald-500" : "bg-red-500"
-                      }`}
-                    >
-                      <div
-                        className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-foreground transition-transform ${
-                          item.enabled ? "translate-x-4" : "translate-x-0"
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => onDelete(item)}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-destructive/25 bg-destructive/10 text-destructive transition-colors hover:bg-destructive/15"
+                        aria-label={`Delete ${item.name}`}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onToggle(item)}
+                        className={`relative h-6 w-10 rounded-lg border transition-all ${
+                          item.enabled
+                            ? "border-emerald-500/35 bg-emerald-500/18 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.08)]"
+                            : "border-red-500/28 bg-red-500/14 shadow-[inset_0_0_0_1px_rgba(239,68,68,0.06)]"
                         }`}
-                      />
-                    </button>
+                        aria-label={`${item.enabled ? "Disable" : "Enable"} ${item.name}`}
+                      >
+                        <div
+                          className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-md border border-border/70 bg-foreground/95 shadow-sm transition-transform ${
+                            item.enabled ? "translate-x-4" : "translate-x-0"
+                          }`}
+                        />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))

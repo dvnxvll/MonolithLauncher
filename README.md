@@ -42,17 +42,28 @@ Development:
 ./dev.sh
 ```
 
-Optional `dev.sh` flags:
+Windows:
+```bat
+.\dev.bat
+```
+
+Windows users should use `dev.bat` and should not run `dev.sh`.
+
+Optional dev flags:
 - `--tips` or `--tour`
 - `--update-test`
 
 Production build:
 ```bash
-cd monolith-ui
-bun run build
-cd ..
-cargo tauri build
+./build.sh
 ```
+
+Windows:
+```bat
+.\build.bat
+```
+
+Windows users should use `build.bat` and should not run `build.sh`.
 
 Artifacts are generated under `src-tauri/target/release/bundle/`.
 

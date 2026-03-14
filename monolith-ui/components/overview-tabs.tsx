@@ -1,12 +1,14 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useState,
   type ChangeEvent,
 } from "react";
 import {
+  AlertTriangle,
   Terminal,
   Package,
   Palette,
@@ -15,25 +17,36 @@ import {
   Map,
   Layers,
   Settings as SettingsIcon,
+  Trash2,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getListen, invoke } from "@/lib/tauri";
 import type {
   ForgeVersionSummary,
   Instance,
+  InstancePreflightReport,
+  InstanceSnapshot,
   InstanceMetrics,
+  JavaRuntimeEntry,
   LoaderVersionSummary,
   ModEntry,
+  ModrinthDependencyPlan,
+  ModrinthDependencyPlanItem,
   ModrinthProjectHit,
   PackEntry,
+  RepairResult,
+  ServerLatencyReport,
   ServerEntry,
   WorldEntry,
 } from "@/lib/launcher-types";
 import { useLauncher } from "@/components/launcher-provider";
 import { resolveLoaderLabel } from "@/lib/launcher-utils";
 import ConsolePanel from "@/components/overview/ConsolePanel";
+import ContentDeleteDialog from "@/components/overview/dialogs/ContentDeleteDialog";
 import PackTable from "@/components/overview/PackTable";
 import DatapackTable from "@/components/overview/DatapackTable";
+import ModDependencyInstallDialog from "@/components/overview/dialogs/ModDependencyInstallDialog";
 import ServerTable from "@/components/overview/ServerTable";
 import WorldTable from "@/components/overview/WorldTable";
 import InstanceSettingsPanel from "@/components/overview/InstanceSettingsPanel";
@@ -65,7 +78,18 @@ type FilterKey =
   | "servers"
   | "worlds";
 
-export default function OverviewTabs({ instance }: { instance: Instance }) {
+type ContentDeleteTarget =
+  | { scope: "mod"; label: string; filename: string }
+  | { scope: "pack"; label: string; filename: string; kind: Exclude<TableKind, "mods"> }
+  | { scope: "datapack"; label: string; filename: string; worldId: string };
+
+export default function OverviewTabs({
+  instance,
+  onRamSaved,
+}: {
+  instance: Instance;
+  onRamSaved?: (instanceId: string, minRamMb: number | null, maxRamMb: number | null) => void;
+}) {
   const {
     config,
     logs,
@@ -107,6 +131,7 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
       query: "",
       results: [],
       loading: false,
+      hasLoaded: false,
       error: null,
       sort: "downloads",
       filters: buildDefaultFilters("mods"),
@@ -115,6 +140,7 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
       query: "",
       results: [],
       loading: false,
+      hasLoaded: false,
       error: null,
       sort: "downloads",
       filters: buildDefaultFilters("resources"),
@@ -123,6 +149,7 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
       query: "",
       results: [],
       loading: false,
+      hasLoaded: false,
       error: null,
       sort: "downloads",
       filters: buildDefaultFilters("shaders"),
@@ -131,6 +158,7 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
       query: "",
       results: [],
       loading: false,
+      hasLoaded: false,
       error: null,
       sort: "downloads",
       filters: buildDefaultFilters("datapacks"),
@@ -157,7 +185,17 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
   const [modrinthBusy, setModrinthBusy] = useState<
     Record<string, "install" | "uninstall">
   >({});
+  const [modrinthPlanningKey, setModrinthPlanningKey] = useState<string | null>(null);
+  const [pendingModInstall, setPendingModInstall] = useState<{
+    kind: ModrinthKind;
+    project: ModrinthProjectHit;
+    dependencies: ModrinthDependencyPlanItem[];
+  } | null>(null);
   const [servers, setServers] = useState<ServerEntry[]>([]);
+  const [serverLatencyByAddress, setServerLatencyByAddress] = useState<
+    Record<string, ServerLatencyReport>
+  >({});
+  const [probingServerAddress, setProbingServerAddress] = useState<string | null>(null);
   const [editingServerIndex, setEditingServerIndex] = useState<number | null>(
     null,
   );
@@ -196,6 +234,9 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
   const [savingLoaderVersion, setSavingLoaderVersion] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteConfirmName, setDeleteConfirmName] = useState("");
+  const [contentDeleteTarget, setContentDeleteTarget] =
+    useState<ContentDeleteTarget | null>(null);
+  const [deletingContent, setDeletingContent] = useState(false);
   const [tableFilters, setTableFilters] = useState<Record<FilterKey, string>>({
     mods: "",
     resources: "",
@@ -205,6 +246,17 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     servers: "",
     worlds: "",
   });
+  const [preflight, setPreflight] = useState<InstancePreflightReport | null>(null);
+  const [loadingPreflight, setLoadingPreflight] = useState(false);
+  const [snapshots, setSnapshots] = useState<InstanceSnapshot[]>([]);
+  const [loadingSnapshots, setLoadingSnapshots] = useState(false);
+  const [creatingSnapshot, setCreatingSnapshot] = useState(false);
+  const [restoringSnapshotId, setRestoringSnapshotId] = useState<string | null>(null);
+  const [deletingSnapshotId, setDeletingSnapshotId] = useState<string | null>(null);
+  const [scanningJavaRuntimes, setScanningJavaRuntimes] = useState(false);
+  const [savingJavaOverride, setSavingJavaOverride] = useState(false);
+  const [repairing, setRepairing] = useState(false);
+  const [selectedJavaOverrideId, setSelectedJavaOverrideId] = useState("default");
 
   const instanceId = instance.id;
 
@@ -224,6 +276,17 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
       jvmArgs: config?.settings?.java?.jvm_args ?? "",
     };
   }, [config]);
+  const javaOptions = useMemo<JavaRuntimeEntry[]>(
+    () => config?.settings?.java?.runtimes ?? [],
+    [config],
+  );
+  const instanceJavaOverridePath = useMemo(
+    () =>
+      config?.settings?.java?.overrides?.find(
+        (entry) => entry.instance_id === instanceId,
+      )?.path ?? null,
+    [config, instanceId],
+  );
 
   const datapackWorldName = useMemo(() => {
     if (!datapackWorldId) return null;
@@ -268,7 +331,8 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     new Set(modrinthUpdates[kind] ?? []);
 
   const isModrinthInstalling = (kind: ModrinthKind, projectId: string) =>
-    modrinthBusy[`${kind}:${projectId}`] === "install";
+    modrinthBusy[`${kind}:${projectId}`] === "install" ||
+    modrinthPlanningKey === `${kind}:${projectId}`;
 
   const isModrinthUninstalling = (kind: ModrinthKind, projectId: string) =>
     modrinthBusy[`${kind}:${projectId}`] === "uninstall";
@@ -285,8 +349,23 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     setCpuLoadPct(null);
     setGpuLoadPct(null);
     setMetricHistory([]);
+    setPreflight(null);
+    setLoadingPreflight(false);
+    setSnapshots([]);
+    setLoadingSnapshots(false);
+    setCreatingSnapshot(false);
+    setRestoringSnapshotId(null);
+    setDeletingSnapshotId(null);
+    setScanningJavaRuntimes(false);
+    setSavingJavaOverride(false);
+    setRepairing(false);
+    setSelectedJavaOverrideId("default");
+    setServerLatencyByAddress({});
+    setProbingServerAddress(null);
     setDeleteConfirmName("");
     setShowDeleteModal(false);
+    setContentDeleteTarget(null);
+    setDeletingContent(false);
     setEditingServerIndex(null);
     setServerDraft({
       name: "",
@@ -318,6 +397,7 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
         query: "",
         results: [],
         loading: false,
+        hasLoaded: false,
         error: null,
         sort: "downloads",
         filters: buildDefaultFilters("mods"),
@@ -326,6 +406,7 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
         query: "",
         results: [],
         loading: false,
+        hasLoaded: false,
         error: null,
         sort: "downloads",
         filters: buildDefaultFilters("resources"),
@@ -334,6 +415,7 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
         query: "",
         results: [],
         loading: false,
+        hasLoaded: false,
         error: null,
         sort: "downloads",
         filters: buildDefaultFilters("shaders"),
@@ -342,6 +424,7 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
         query: "",
         results: [],
         loading: false,
+        hasLoaded: false,
         error: null,
         sort: "downloads",
         filters: buildDefaultFilters("datapacks"),
@@ -352,6 +435,15 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
   useEffect(() => {
     setActiveTab("console");
   }, [instanceId]);
+
+  useEffect(() => {
+    if (!instanceJavaOverridePath) {
+      setSelectedJavaOverrideId("default");
+      return;
+    }
+    const match = javaOptions.find((runtime) => runtime.path === instanceJavaOverridePath);
+    setSelectedJavaOverrideId(match?.id ?? "default");
+  }, [instanceJavaOverridePath, javaOptions]);
 
   useEffect(() => {
     if (activeTab !== "console") return;
@@ -633,6 +725,68 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     }
   };
 
+  const loadPreflight = useCallback(async () => {
+    setLoadingPreflight(true);
+    try {
+      const data = await invoke<InstancePreflightReport>("get_instance_preflight", {
+        instanceId,
+      });
+      setPreflight(data);
+      return data;
+    } catch (err: any) {
+      const message = err?.toString?.() || "Failed to load instance checks.";
+      setStatus(message, "error");
+      return null;
+    } finally {
+      setLoadingPreflight(false);
+    }
+  }, [instanceId, setStatus]);
+
+  const loadSnapshots = useCallback(async () => {
+    setLoadingSnapshots(true);
+    try {
+      const data = await invoke<InstanceSnapshot[]>("list_instance_snapshots", {
+        instanceId,
+      });
+      setSnapshots(data || []);
+    } catch (err: any) {
+      const message = err?.toString?.() || "Failed to load snapshots.";
+      setStatus(message, "error");
+    } finally {
+      setLoadingSnapshots(false);
+    }
+  }, [instanceId, setStatus]);
+
+  const scanJavaRuntimes = useCallback(async () => {
+    setScanningJavaRuntimes(true);
+    try {
+      await invoke<JavaRuntimeEntry[]>("scan_java_runtimes");
+      await refreshConfig();
+      setStatus("Java runtimes rescanned.");
+    } catch (err: any) {
+      const message = err?.toString?.() || "Failed to scan Java runtimes.";
+      setStatus(message, "error");
+    } finally {
+      setScanningJavaRuntimes(false);
+    }
+  }, [refreshConfig, setStatus]);
+
+  useEffect(() => {
+    if (activeTab !== "settings") return;
+    loadPreflight();
+    loadSnapshots();
+    if ((config?.settings?.java?.runtimes?.length ?? 0) === 0) {
+      scanJavaRuntimes();
+    }
+  }, [
+    activeTab,
+    config?.settings?.java?.runtimes?.length,
+    instanceId,
+    loadPreflight,
+    loadSnapshots,
+    scanJavaRuntimes,
+  ]);
+
   const resolveModrinthProjectType = (kind: ModrinthKind) => {
     if (kind === "mods") return "mod";
     if (kind === "resources") return "resourcepack";
@@ -682,7 +836,9 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     const loader =
       kind === "mods" && loaderOverride.length === 1
         ? loaderOverride[0]
-        : modrinthLoader;
+        : kind === "mods"
+          ? modrinthLoader
+          : null;
     const gameVersion = filters.showAllVersions ? "" : instance.version;
     const extraFacets = buildModrinthFacets(kind, filters);
     updateModrinthState(kind, { loading: true, error: null, query });
@@ -699,10 +855,18 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
           extraFacets,
         },
       );
-      updateModrinthState(kind, { results: results || [], loading: false });
+      updateModrinthState(kind, {
+        results: results || [],
+        loading: false,
+        hasLoaded: true,
+      });
     } catch (err: any) {
       const message = err?.toString?.() || "Modrinth search failed.";
-      updateModrinthState(kind, { error: message, loading: false });
+      updateModrinthState(kind, {
+        error: message,
+        loading: false,
+        hasLoaded: true,
+      });
     }
   };
 
@@ -765,6 +929,11 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
       setStatus("Select a world before browsing datapacks.", "error");
       return;
     }
+    updateModrinthState(kind, {
+      loading: true,
+      error: null,
+      hasLoaded: false,
+    });
     setModrinthDialogKind(kind);
     await Promise.all([
       loadModrinthInstalls(kind),
@@ -846,9 +1015,10 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
   const handleModrinthInstall = async (
     kind: ModrinthKind,
     project: ModrinthProjectHit,
+    installDependencies = true,
   ) => {
     const key = `${kind}:${project.project_id}`;
-    if (modrinthBusy[key]) return;
+    if (modrinthBusy[key] || modrinthPlanningKey === key) return;
     setModrinthBusy((prev) => ({ ...prev, [key]: "install" }));
     try {
       const loaderOverride =
@@ -864,6 +1034,7 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
         gameVersion: instance.version,
         loader: kind === "mods" ? installLoader : null,
         worldId: kind === "datapacks" ? datapackWorldId : null,
+        installDependencies,
       });
       if (kind === "mods") {
         const data = await invoke<ModEntry[]>("list_instance_mods", {
@@ -900,6 +1071,46 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
         delete next[key];
         return next;
       });
+    }
+  };
+
+  const handleRequestedModrinthInstall = async (
+    kind: ModrinthKind,
+    project: ModrinthProjectHit,
+  ) => {
+    if (kind !== "mods") {
+      await handleModrinthInstall(kind, project, true);
+      return;
+    }
+    const key = `${kind}:${project.project_id}`;
+    if (modrinthBusy[key] || modrinthPlanningKey === key) return;
+    setModrinthPlanningKey(key);
+    try {
+      const loaderOverride = modrinthState[kind].filters.loaders;
+      const installLoader =
+        loaderOverride.length === 1 ? loaderOverride[0] : modrinthLoader;
+      const plan = await invoke<ModrinthDependencyPlan>("get_modrinth_install_plan", {
+        instanceId,
+        projectId: project.project_id,
+        projectType: resolveModrinthProjectType(kind),
+        gameVersion: instance.version,
+        loader: installLoader,
+        worldId: null,
+      });
+      if ((plan.dependencies || []).length > 0) {
+        setPendingModInstall({
+          kind,
+          project,
+          dependencies: plan.dependencies,
+        });
+        return;
+      }
+      await handleModrinthInstall(kind, project, true);
+    } catch (err: any) {
+      const message = err?.toString?.() || "Failed to inspect Modrinth dependencies.";
+      setStatus(message, "error");
+    } finally {
+      setModrinthPlanningKey(null);
     }
   };
 
@@ -956,8 +1167,59 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     }
   };
 
+  const handleModrinthUpdate = async (
+    kind: ModrinthKind,
+    project: ModrinthProjectHit,
+  ) => {
+    const key = `${kind}:${project.project_id}`;
+    if (modrinthBusy[key]) return;
+    setModrinthBusy((prev) => ({ ...prev, [key]: "install" }));
+    try {
+      const loaderOverride =
+        kind === "mods" ? modrinthState[kind].filters.loaders : [];
+      const updateLoader =
+        kind === "mods" && loaderOverride.length === 1
+          ? loaderOverride[0]
+          : modrinthLoader;
+      await invoke("update_modrinth_project", {
+        instanceId,
+        projectId: project.project_id,
+        projectType: resolveModrinthProjectType(kind),
+        gameVersion: instance.version,
+        loader: kind === "mods" ? updateLoader : null,
+        worldId: kind === "datapacks" ? datapackWorldId : null,
+      });
+      if (kind === "mods") {
+        const data = await invoke<ModEntry[]>("list_instance_mods", {
+          instanceId,
+        });
+        setMods(data || []);
+      }
+      await Promise.all([
+        loadModrinthInstalls(kind),
+        loadModrinthUpdates(kind),
+      ]);
+      setStatus(`${project.title} updated.`);
+    } catch (err: any) {
+      const message = err?.toString?.() || "Failed to update from Modrinth.";
+      setStatus(message, "error");
+    } finally {
+      setModrinthBusy((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    }
+  };
+
   const handleStart = async () => {
     try {
+      const report = await loadPreflight();
+      if (report && !report.ready) {
+        setActiveTab("settings");
+        setStatus("Pre-launch checks failed. Review diagnostics in Settings.", "error");
+        return;
+      }
       await invoke("launch_instance", {
         instanceId,
         playerName: resolvePlayerName(),
@@ -968,6 +1230,7 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     } catch (err: any) {
       const message = err?.toString?.() || "Launch failed.";
       setStatus(message, "error");
+      await loadPreflight();
     }
   };
 
@@ -1128,6 +1391,82 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     await persistServers(next);
   };
 
+  const probeServerAddress = useCallback(async (address: string, probes = 5) => {
+    return invoke<ServerLatencyReport>("analyze_server_latency", {
+      address,
+      probes,
+      timeoutMs: 1200,
+    });
+  }, []);
+
+  const handleProbeServer = async (server: ServerEntry) => {
+    if (!config?.settings.network_diagnostics) {
+      setStatus("Enable Network Diagnostics in Settings to run ping analysis.", "error");
+      return;
+    }
+    const address = server.ip.trim();
+    const key = address.toLowerCase();
+    if (!address) {
+      setStatus("Server address is required for ping analysis.", "error");
+      return;
+    }
+    setProbingServerAddress(key);
+    try {
+      const report = await probeServerAddress(address, 5);
+      setServerLatencyByAddress((prev) => ({ ...prev, [key]: report }));
+      if (report.median_ms !== null && report.median_ms !== undefined) {
+        setStatus(
+          `${server.name}: ${Math.round(report.median_ms)}ms median (${report.loss_pct.toFixed(0)}% loss).`,
+        );
+      } else {
+        setStatus(`${server.name}: no response during probe.`, "error");
+      }
+    } catch (err: any) {
+      const message = err?.toString?.() || "Failed to run server latency analysis.";
+      setStatus(message, "error");
+    } finally {
+      setProbingServerAddress(null);
+    }
+  };
+
+  useEffect(() => {
+    if (!instanceId) return;
+    if (!config?.settings.network_diagnostics) {
+      setServerLatencyByAddress({});
+      return;
+    }
+    let cancelled = false;
+
+    const probeAllServers = async () => {
+      try {
+        const list = await invoke<ServerEntry[]>("list_instance_servers", { instanceId });
+        if (cancelled) return;
+        for (const server of (list || []).slice(0, 8)) {
+          if (cancelled) break;
+          const address = server.ip.trim();
+          if (!address) continue;
+          try {
+            const report = await probeServerAddress(address, 3);
+            if (cancelled) break;
+            const key = address.toLowerCase();
+            setServerLatencyByAddress((prev) => ({ ...prev, [key]: report }));
+          } catch {
+            continue;
+          }
+        }
+      } catch {
+        return;
+      }
+    };
+
+    probeAllServers();
+    const intervalId = window.setInterval(probeAllServers, 90_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [config?.settings.network_diagnostics, instanceId, probeServerAddress]);
+
   const ramDisplayUnit = ramUnit === "gb" ? "GB" : "MB";
   const displayMinRam =
     ramUnit === "gb" ? Number((minRamMb / 1024).toFixed(2)) : minRamMb;
@@ -1241,6 +1580,100 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
     }
   };
 
+  const handleRequestDeleteMod = (entry: ModEntry) => {
+    setContentDeleteTarget({
+      scope: "mod",
+      label: entry.name,
+      filename: entry.filename,
+    });
+  };
+
+  const handleRequestDeletePack = (
+    entry: PackEntry,
+    kind: Exclude<TableKind, "mods">,
+  ) => {
+    setContentDeleteTarget({
+      scope: "pack",
+      label: entry.name,
+      filename: entry.filename,
+      kind,
+    });
+  };
+
+  const handleRequestDeleteDatapack = (entry: PackEntry) => {
+    if (!datapackWorldId) return;
+    setContentDeleteTarget({
+      scope: "datapack",
+      label: entry.name,
+      filename: entry.filename,
+      worldId: datapackWorldId,
+    });
+  };
+
+  const handleConfirmDeleteContent = async () => {
+    if (!contentDeleteTarget) return;
+    setDeletingContent(true);
+    try {
+      if (contentDeleteTarget.scope === "mod") {
+        await invoke("delete_mod", {
+          instanceId,
+          filename: contentDeleteTarget.filename,
+        });
+        const data = await invoke<ModEntry[]>("list_instance_mods", {
+          instanceId,
+        });
+        setMods(data || []);
+        await Promise.all([
+          loadModrinthInstalls("mods"),
+          loadModrinthUpdates("mods"),
+        ]);
+      } else if (contentDeleteTarget.scope === "pack") {
+        await invoke("delete_instance_pack", {
+          instanceId,
+          kind: contentDeleteTarget.kind,
+          filename: contentDeleteTarget.filename,
+        });
+        const data = await invoke<PackEntry[]>("list_instance_packs", {
+          instanceId,
+          kind: contentDeleteTarget.kind,
+        });
+        if (contentDeleteTarget.kind === "resourcepacks") setResourcepacks(data || []);
+        if (contentDeleteTarget.kind === "texturepacks") setTexturepacks(data || []);
+        if (contentDeleteTarget.kind === "shaderpacks") setShaders(data || []);
+        if (contentDeleteTarget.kind === "resourcepacks") {
+          await Promise.all([
+            loadModrinthInstalls("resources"),
+            loadModrinthUpdates("resources"),
+          ]);
+        }
+        if (contentDeleteTarget.kind === "shaderpacks") {
+          await Promise.all([
+            loadModrinthInstalls("shaders"),
+            loadModrinthUpdates("shaders"),
+          ]);
+        }
+      } else {
+        await invoke("delete_instance_datapack", {
+          instanceId,
+          worldId: contentDeleteTarget.worldId,
+          filename: contentDeleteTarget.filename,
+        });
+        await loadDatapacks(contentDeleteTarget.worldId);
+        await Promise.all([
+          loadModrinthInstalls("datapacks", contentDeleteTarget.worldId),
+          loadModrinthUpdates("datapacks", contentDeleteTarget.worldId),
+        ]);
+      }
+      setStatus(`${contentDeleteTarget.label} deleted.`);
+      setContentDeleteTarget(null);
+    } catch (err: any) {
+      const message = err?.toString?.() || "Failed to delete content.";
+      setStatus(message, "error");
+    } finally {
+      setDeletingContent(false);
+    }
+  };
+
   const handleRename = async () => {
     const nextName = instanceNameState.trim();
     if (!nextName || nextName === instance.name) return;
@@ -1259,12 +1692,15 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
 
   const handleSaveSettings = async () => {
     try {
+      const nextMin = minRamMb > 0 ? minRamMb : null;
+      const nextMax = maxRamMb > 0 ? maxRamMb : null;
       await invoke("update_instance_settings", {
         instanceId,
-        minRamMb: minRamMb > 0 ? minRamMb : null,
-        maxRamMb: maxRamMb > 0 ? maxRamMb : null,
+        minRamMb: nextMin,
+        maxRamMb: nextMax,
         jvmArgs: jvmArgs?.trim?.() || null,
       });
+      onRamSaved?.(instanceId, nextMin, nextMax);
       await refreshConfig();
       setStatus("Instance settings saved.");
     } catch (err: any) {
@@ -1308,6 +1744,7 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
         maxRamMb: null,
         jvmArgs: null,
       });
+      onRamSaved?.(instanceId, null, null);
       await refreshConfig();
       setMinRamMb(defaults.minRam);
       setMaxRamMb(defaults.maxRam);
@@ -1332,11 +1769,104 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
 
   const handleRepairInstance = async () => {
     try {
-      await invoke("repair_instance", { instanceId });
-      setStatus("Instance marked for repair. Launch to re-download files.");
+      setRepairing(true);
+      const result = await invoke<RepairResult>("repair_instance", { instanceId });
+      await Promise.all([loadPreflight(), loadSnapshots()]);
+      const snapshotMessage = result.snapshot
+        ? ` Snapshot saved: ${result.snapshot.reason || result.snapshot.id}.`
+        : "";
+      setStatus(`${result.summary}${snapshotMessage}`);
     } catch (err: any) {
       const message = err?.toString?.() || "Failed to repair instance.";
       setStatus(message, "error");
+    } finally {
+      setRepairing(false);
+    }
+  };
+
+  const handleCreateSnapshot = async () => {
+    try {
+      setCreatingSnapshot(true);
+      const snapshot = await invoke<InstanceSnapshot>("create_instance_snapshot", {
+        instanceId,
+        reason: "Manual snapshot",
+      });
+      await loadSnapshots();
+      await loadPreflight();
+      setStatus(`Snapshot created: ${snapshot.reason || snapshot.id}.`);
+    } catch (err: any) {
+      const message = err?.toString?.() || "Failed to create snapshot.";
+      setStatus(message, "error");
+    } finally {
+      setCreatingSnapshot(false);
+    }
+  };
+
+  const handleRestoreSnapshot = async (snapshotId: string) => {
+    try {
+      setRestoringSnapshotId(snapshotId);
+      await invoke("restore_instance_snapshot", { instanceId, snapshotId });
+      await Promise.all([loadSnapshots(), loadPreflight(), refreshConfig()]);
+      setStatus("Snapshot restored.");
+    } catch (err: any) {
+      const message = err?.toString?.() || "Failed to restore snapshot.";
+      setStatus(message, "error");
+    } finally {
+      setRestoringSnapshotId(null);
+    }
+  };
+
+  const handleDeleteSnapshot = async (snapshotId: string) => {
+    try {
+      setDeletingSnapshotId(snapshotId);
+      await invoke("delete_instance_snapshot", { instanceId, snapshotId });
+      await Promise.all([loadSnapshots(), loadPreflight()]);
+      setStatus("Snapshot deleted.");
+    } catch (err: any) {
+      const message = err?.toString?.() || "Failed to delete snapshot.";
+      setStatus(message, "error");
+    } finally {
+      setDeletingSnapshotId(null);
+    }
+  };
+
+  const handleJavaOverrideChange = async (value: string) => {
+    setSelectedJavaOverrideId(value);
+    setSavingJavaOverride(true);
+    try {
+      const runtimePath =
+        value === "default"
+          ? null
+          : javaOptions.find((entry) => entry.id === value)?.path ?? null;
+      await invoke("set_instance_java_override", {
+        instanceId,
+        javaPath: runtimePath,
+      });
+      await Promise.all([refreshConfig(), loadPreflight()]);
+      setStatus(
+        value === "default"
+          ? "Instance Java override cleared."
+          : "Instance Java override updated.",
+      );
+    } catch (err: any) {
+      const message = err?.toString?.() || "Failed to update Java override.";
+      setStatus(message, "error");
+    } finally {
+      setSavingJavaOverride(false);
+    }
+  };
+
+  const handleCopyRecentLog = async () => {
+    const text = preflight?.latest_log_excerpt?.trim();
+    if (!text) {
+      setStatus("No recent log signal to copy.", "error");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setStatus("Recent log signal copied.");
+    } catch {
+      setStatus("Failed to copy recent log signal.", "error");
     }
   };
 
@@ -1409,8 +1939,8 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto p-8">
-        <div className="max-w-6xl flex-1 min-h-0 flex flex-col">
+      <div className="flex-1 min-h-0 overflow-y-auto p-4 md:p-6 xl:p-8">
+        <div className="mx-auto flex w-full max-w-[1520px] min-h-0 flex-1 flex-col">
           {activeTab === "console" && (
             <ConsolePanel
               breadcrumbs={renderBreadcrumbs()}
@@ -1434,6 +1964,7 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
               breadcrumbs={renderBreadcrumbs()}
               items={mods}
               onToggle={handleToggleMod}
+              onDelete={handleRequestDeleteMod}
               onOpen={() => openPath("mods")}
               query={getFilter("mods")}
               onQueryChange={(value) => setFilter("mods", value)}
@@ -1452,6 +1983,7 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
               breadcrumbs={renderBreadcrumbs()}
               items={resourcepacks}
               onToggle={(entry) => handleTogglePack(entry, "resourcepacks")}
+              onDelete={(entry) => handleRequestDeletePack(entry, "resourcepacks")}
               onOpen={() => openPath("resourcepacks")}
               query={getFilter("resources")}
               onQueryChange={(value) => setFilter("resources", value)}
@@ -1471,6 +2003,7 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
               breadcrumbs={renderBreadcrumbs()}
               items={texturepacks}
               onToggle={(entry) => handleTogglePack(entry, "texturepacks")}
+              onDelete={(entry) => handleRequestDeletePack(entry, "texturepacks")}
               onOpen={() => openPath("texturepacks")}
               query={getFilter("textures")}
               onQueryChange={(value) => setFilter("textures", value)}
@@ -1483,6 +2016,7 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
               breadcrumbs={renderBreadcrumbs()}
               items={shaders}
               onToggle={(entry) => handleTogglePack(entry, "shaderpacks")}
+              onDelete={(entry) => handleRequestDeletePack(entry, "shaderpacks")}
               onOpen={() => openPath("shaderpacks")}
               query={getFilter("shaders")}
               onQueryChange={(value) => setFilter("shaders", value)}
@@ -1513,6 +2047,7 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
               onOpen={() => openDatapacksPath(datapackWorldId)}
               items={datapacks}
               onToggle={handleToggleDatapack}
+              onDelete={handleRequestDeleteDatapack}
               query={getFilter("datapacks")}
               onQueryChange={(value) => setFilter("datapacks", value)}
             />
@@ -1537,6 +2072,10 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
               resolveImageData={resolveImageData}
               query={getFilter("servers")}
               onQueryChange={(value) => setFilter("servers", value)}
+              diagnosticsEnabled={config?.settings.network_diagnostics ?? true}
+              probingAddress={probingServerAddress}
+              latencyByAddress={serverLatencyByAddress}
+              onProbe={handleProbeServer}
             />
           )}
           {activeTab === "worlds" && (
@@ -1565,6 +2104,24 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
               onRename={handleRename}
               loaderLabel={resolveLoaderLabel(instance.loader)}
               version={instance.version}
+              javaOverrideId={selectedJavaOverrideId}
+              javaOptions={javaOptions}
+              onJavaOverrideChange={handleJavaOverrideChange}
+              savingJavaOverride={savingJavaOverride}
+              onScanJavaRuntimes={scanJavaRuntimes}
+              scanningJavaRuntimes={scanningJavaRuntimes}
+              preflight={preflight}
+              loadingPreflight={loadingPreflight}
+              onRefreshPreflight={loadPreflight}
+              onCopyRecentLog={handleCopyRecentLog}
+              snapshots={snapshots}
+              loadingSnapshots={loadingSnapshots}
+              creatingSnapshot={creatingSnapshot}
+              restoringSnapshotId={restoringSnapshotId}
+              deletingSnapshotId={deletingSnapshotId}
+              onCreateSnapshot={handleCreateSnapshot}
+              onRestoreSnapshot={handleRestoreSnapshot}
+              onDeleteSnapshot={handleDeleteSnapshot}
               ramUnit={ramUnit}
               onRamUnitChange={setRamUnit}
               displayMinRam={displayMinRam}
@@ -1596,60 +2153,119 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
               onSaveLoaderVersion={handleSaveLoaderVersion}
               savingLoaderVersion={savingLoaderVersion}
               onRepair={handleRepairInstance}
+              repairing={repairing}
               onDelete={() => setShowDeleteModal(true)}
             />
           )}
         </div>
         {showDeleteModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-card border border-border rounded-lg shadow-xl w-full max-w-md">
-              <div className="flex items-center justify-between p-6 border-b border-border">
-                <h2 className="text-xl font-bold">Confirm Delete</h2>
-                <button
-                  onClick={() => {
-                    setShowDeleteModal(false);
-                    setDeleteConfirmName("");
-                  }}
-                  className="p-1 hover:bg-muted rounded transition-colors"
-                >
-                  ✕
-                </button>
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-6 backdrop-blur-sm">
+            <div className="w-full max-w-2xl overflow-hidden rounded-2xl border border-destructive/25 bg-card shadow-2xl">
+              <div className="border-b border-destructive/20 bg-destructive/8 px-5 py-4 md:px-6">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-start gap-3">
+                    <div className="rounded-xl border border-destructive/25 bg-destructive/12 p-2.5 text-destructive">
+                      <AlertTriangle size={18} />
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-[0.28em] text-destructive/70">
+                        Danger Zone
+                      </p>
+                      <h2 className="mt-1 text-xl font-bold text-foreground">
+                        Delete Instance
+                      </h2>
+                      <p className="mt-2 text-sm text-foreground/65">
+                        This permanently removes the instance directory and its launcher-managed data.
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => {
+                      setShowDeleteModal(false);
+                      setDeleteConfirmName("");
+                    }}
+                    className="text-foreground/60 hover:bg-secondary/50 hover:text-foreground"
+                  >
+                    <X size={16} />
+                  </Button>
+                </div>
               </div>
-              <div className="p-6 space-y-4">
-                <p className="text-sm text-foreground/70">
-                  Type '<span className="font-semibold">{instance.name}</span>'
-                  to confirm deletion.
-                </p>
-                <input
-                  type="text"
-                  value={deleteConfirmName}
-                  onChange={(event) => setDeleteConfirmName(event.target.value)}
-                  placeholder={instance.name}
-                  className="w-full bg-input border border-border rounded-lg px-4 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-destructive font-mono"
-                />
-              </div>
-              <div className="flex gap-3 p-6 border-t border-border">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setShowDeleteModal(false);
-                    setDeleteConfirmName("");
-                  }}
-                  className="flex-1 bg-transparent"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={async () => {
-                    await handleDeleteInstance();
-                    setShowDeleteModal(false);
-                    setDeleteConfirmName("");
-                  }}
-                  disabled={deleteConfirmName.trim() !== instance.name}
-                  className="flex-1 bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:opacity-60"
-                >
-                  Delete
-                </Button>
+              <div className="space-y-5 px-5 py-5 md:px-6 md:py-6">
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className="rounded-xl border border-border bg-secondary/15 p-4">
+                    <p className="text-[10px] uppercase tracking-[0.24em] text-foreground/45">
+                      Instance
+                    </p>
+                    <p className="mt-2 text-sm font-semibold text-foreground">
+                      {instance.name}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-border bg-secondary/15 p-4">
+                    <p className="text-[10px] uppercase tracking-[0.24em] text-foreground/45">
+                      Loader
+                    </p>
+                    <p className="mt-2 text-sm font-semibold text-foreground">
+                      {resolveLoaderLabel(instance.loader)}
+                    </p>
+                    <p className="mt-1 text-xs text-foreground/55">
+                      {instance.version}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-border bg-secondary/15 p-4">
+                    <p className="text-[10px] uppercase tracking-[0.24em] text-foreground/45">
+                      Directory
+                    </p>
+                    <p className="mt-2 break-all text-xs text-foreground/70">
+                      {instance.directory}
+                    </p>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-destructive/20 bg-destructive/8 p-4">
+                  <p className="text-[10px] uppercase tracking-[0.24em] text-destructive/70">
+                    Confirmation Required
+                  </p>
+                  <p className="mt-2 text-sm text-foreground/72">
+                    Type <span className="rounded bg-secondary/60 px-1.5 py-0.5 font-semibold text-foreground">{instance.name}</span> to unlock deletion.
+                  </p>
+                  <input
+                    type="text"
+                    value={deleteConfirmName}
+                    onChange={(event) => setDeleteConfirmName(event.target.value)}
+                    placeholder={instance.name}
+                    className="mt-4 w-full rounded-xl border border-border bg-input px-4 py-3 font-mono text-sm text-foreground outline-none transition focus:border-destructive/50 focus:ring-2 focus:ring-destructive/25"
+                  />
+                </div>
+                <div className="flex flex-col gap-3 border-t border-border pt-5 md:flex-row md:items-center md:justify-between">
+                  <p className="text-xs text-foreground/50">
+                    Snapshots stored outside this instance are not removed automatically.
+                  </p>
+                  <div className="flex flex-col gap-3 sm:flex-row">
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setShowDeleteModal(false);
+                        setDeleteConfirmName("");
+                      }}
+                      className="bg-transparent"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      onClick={async () => {
+                        await handleDeleteInstance();
+                        setShowDeleteModal(false);
+                        setDeleteConfirmName("");
+                      }}
+                      disabled={deleteConfirmName.trim() !== instance.name}
+                    >
+                      <Trash2 size={16} />
+                      Delete Instance
+                    </Button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -1695,7 +2311,10 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
               handleModrinthShowAllVersionsToggle(modrinthDialogKind)
             }
             onInstall={(project) =>
-              handleModrinthInstall(modrinthDialogKind, project)
+              handleRequestedModrinthInstall(modrinthDialogKind, project)
+            }
+            onUpdate={(project) =>
+              handleModrinthUpdate(modrinthDialogKind, project)
             }
             onUninstall={(project) =>
               handleModrinthUninstall(modrinthDialogKind, project)
@@ -1708,6 +2327,33 @@ export default function OverviewTabs({ instance }: { instance: Instance }) {
             }
           />
         ) : null}
+        <ModDependencyInstallDialog
+          open={!!pendingModInstall}
+          kind={pendingModInstall?.kind ?? "mods"}
+          project={pendingModInstall?.project ?? null}
+          dependencies={pendingModInstall?.dependencies ?? []}
+          onClose={() => setPendingModInstall(null)}
+          onInstallOnly={async () => {
+            const next = pendingModInstall;
+            setPendingModInstall(null);
+            if (!next) return;
+            await handleModrinthInstall(next.kind, next.project, false);
+          }}
+          onInstallWithDependencies={async () => {
+            const next = pendingModInstall;
+            setPendingModInstall(null);
+            if (!next) return;
+            await handleModrinthInstall(next.kind, next.project, true);
+          }}
+        />
+        <ContentDeleteDialog
+          open={!!contentDeleteTarget}
+          label={contentDeleteTarget?.label ?? ""}
+          filename={contentDeleteTarget?.filename ?? ""}
+          deleting={deletingContent}
+          onClose={() => setContentDeleteTarget(null)}
+          onConfirm={handleConfirmDeleteContent}
+        />
       </div>
     </div>
   );

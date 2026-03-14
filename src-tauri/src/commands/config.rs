@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use crate::config::{AppConfig, ConfigStore};
+use crate::DiscordRpcState;
 
 fn resolve_home_dir() -> Option<PathBuf> {
   if let Ok(home) = std::env::var("HOME") {
@@ -24,9 +25,15 @@ pub(crate) fn load_config(state: tauri::State<'_, Mutex<ConfigStore>>) -> Result
 pub(crate) fn save_config(
   config: AppConfig,
   state: tauri::State<'_, Mutex<ConfigStore>>,
+  discord: tauri::State<'_, Mutex<DiscordRpcState>>,
 ) -> Result<(), String> {
+  let discord_enabled = config.settings.discord_presence;
+  let discord_mode = config.settings.discord_presence_mode.clone();
   let mut store = state.lock().map_err(|_| "config store lock poisoned".to_string())?;
-  store.set(config).map_err(|err| err.to_string())
+  store.set(config).map_err(|err| err.to_string())?;
+  let mut rpc = discord.lock().map_err(|_| "discord rpc lock poisoned".to_string())?;
+  rpc.set_config(discord_enabled, discord_mode);
+  Ok(())
 }
 
 #[tauri::command]

@@ -49,6 +49,32 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache Bun and Next
+        uses: actions/cache@v5.0.3
+        with:
+          path: |
+            ~/.bun/install/cache
+            monolith-ui/node_modules
+            monolith-ui/.next/cache
+          key: ${{ runner.os }}-${{ matrix.key }}-bun-next-${{ hashFiles('monolith-ui/bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.key }}-bun-next-
+            ${{ runner.os }}-bun-next-
+
+      - name: Cache Cargo
+        uses: actions/cache@v5.0.3
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/git/checkouts
+            src-tauri/target
+          key: ${{ runner.os }}-${{ matrix.key }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.key }}-cargo-
+            ${{ runner.os }}-cargo-
+
       - name: Install Tauri CLI
         shell: bash
         run: cargo install tauri-cli --locked --version '^2'
@@ -99,11 +125,44 @@ jobs:
         id: collect_files
         shell: bash
         run: |
-          mapfile -t FILES < <(find release-artifacts -type f | sort)
-          if [ "${#FILES[@]}" -eq 0 ]; then
-            echo "No release files found."
+          STAGE_DIR="release-artifacts/final-assets"
+          rm -rf "${STAGE_DIR}"
+          mkdir -p "${STAGE_DIR}"
+
+          mapfile -t CANDIDATES < <(
+            find release-artifacts -type f \
+              \( \
+                -path '*/bundle/appimage/*.AppImage' -o \
+                -path '*/bundle/deb/*.deb' -o \
+                -path '*/bundle/rpm/*.rpm' -o \
+                -path '*/bundle/msi/*.msi' -o \
+                -path '*/bundle/nsis/*.exe' -o \
+                -path '*/bundle/dmg/*.dmg' -o \
+                -path '*/bundle/macos/*.app.tar.gz' \
+              \) \
+              | sort
+          )
+
+          if [ "${#CANDIDATES[@]}" -eq 0 ]; then
+            echo "No distributable release artifacts found."
+            echo "Tree for debugging:"
+            find release-artifacts -maxdepth 5 -type f | sort
             exit 1
           fi
+
+          declare -A SEEN
+          for src in "${CANDIDATES[@]}"; do
+            base="$(basename "${src}")"
+            if [[ -n "${SEEN[$base]:-}" ]]; then
+              rel_dir="$(dirname "${src#release-artifacts/}")"
+              safe_dir="$(echo "${rel_dir}" | tr '/ ' '__')"
+              base="${safe_dir}__${base}"
+            fi
+            SEEN["$base"]=1
+            cp "${src}" "${STAGE_DIR}/${base}"
+          done
+
+          mapfile -t FILES < <(find "${STAGE_DIR}" -maxdepth 1 -type f | sort)
 
           {
             echo "files<<EOF"
